@@ -26,6 +26,11 @@ IGNORE_PATTERNS = [
     "*.o",
     "*.a",
     "*.bin",
+    ".local",
+    ".cache",
+    ".upm",
+    ".pythonlibs",
+    ".config",
 ]
 
 GPU_SPEC = os.environ.get("JAIDE_BENCH_GPU", "B200+:1")

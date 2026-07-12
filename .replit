@@ -1,3 +1,4 @@
+modules = ["python-base-3.13"]
 [agent]
 expertMode = true
 
@@ -19,43 +20,76 @@ run = ["python", "scripts/modal_status_bench.py"]
 deploymentTarget = "cloudrun"
 
 [workflows]
-runButton = "Run Modal Status Bench"
+runButton = "Project"
 
 [[workflows.workflow]]
 name = "Run Modal Status Bench"
 mode = "sequential"
-author = "arena"
+author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "python -m pip install --quiet --upgrade modal && python -m modal run scripts/modal_status_bench.py"
+args = "uv run modal run scripts/modal_status_bench.py"
+
+[workflows.workflow.metadata]
+outputType = "console"
 
 [[workflows.workflow]]
 name = "Setup Modal Token"
 mode = "sequential"
-author = "arena"
+author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "python -m pip install --quiet --upgrade modal && python -m modal token set --token-id \"$MODAL_TOKEN_ID\" --token-secret \"$MODAL_TOKEN_SECRET\" --profile=kutyamajom && python -m modal profile activate kutyamajom"
+args = "uv run modal token set --token-id \"$MODAL_TOKEN_ID\" --token-secret \"$MODAL_TOKEN_SECRET\" --profile=kutyamajom && uv run modal profile activate kutyamajom"
+
+[workflows.workflow.metadata]
+outputType = "console"
 
 [[workflows.workflow]]
 name = "Modal App List"
 mode = "sequential"
-author = "arena"
+author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "python -m modal app list"
+args = "uv run modal app list"
+
+[workflows.workflow.metadata]
+outputType = "console"
 
 [[workflows.workflow]]
 name = "Modal Report Volume Ls"
 mode = "sequential"
-author = "arena"
+author = "agent"
 
 [[workflows.workflow.tasks]]
 task = "shell.exec"
-args = "python -m modal volume ls jaide-bench-reports"
+args = "uv run modal volume ls jaide-bench-reports"
+
+[workflows.workflow.metadata]
+outputType = "console"
+
+[[workflows.workflow]]
+name = "Project"
+mode = "parallel"
+author = "agent"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Setup Modal Token"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Run Modal Status Bench"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Modal App List"
+
+[[workflows.workflow.tasks]]
+task = "workflow.run"
+args = "Modal Report Volume Ls"
 
 [[ports]]
 localPort = 8080
