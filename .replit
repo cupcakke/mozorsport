@@ -1,0 +1,65 @@
+[agent]
+expertMode = true
+
+entrypoint = "scripts/modal_status_bench.py"
+
+modules = ["python-3.11"]
+
+hidden = [".zig-cache", "zig-out", ".venv", "__pycache__"]
+
+[nix]
+channel = "stable-24_05"
+
+[env]
+PYTHONUNBUFFERED = "1"
+MODAL_PROFILE = "kutyamajom"
+
+[deployment]
+run = ["python", "scripts/modal_status_bench.py"]
+deploymentTarget = "cloudrun"
+
+[workflows]
+runButton = "Run Modal Status Bench"
+
+[[workflows.workflow]]
+name = "Run Modal Status Bench"
+mode = "sequential"
+author = "arena"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "python -m pip install --quiet --upgrade modal && python -m modal run scripts/modal_status_bench.py"
+
+[[workflows.workflow]]
+name = "Setup Modal Token"
+mode = "sequential"
+author = "arena"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "python -m pip install --quiet --upgrade modal && python -m modal token set --token-id \"$MODAL_TOKEN_ID\" --token-secret \"$MODAL_TOKEN_SECRET\" --profile=kutyamajom && python -m modal profile activate kutyamajom"
+
+[[workflows.workflow]]
+name = "Modal App List"
+mode = "sequential"
+author = "arena"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "python -m modal app list"
+
+[[workflows.workflow]]
+name = "Modal Report Volume Ls"
+mode = "sequential"
+author = "arena"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "python -m modal volume ls jaide-bench-reports"
+
+[[ports]]
+localPort = 8080
+externalPort = 80
+
+[gitHubImport]
+requiredFiles = [".replit", "replit.nix"]
