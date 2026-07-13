@@ -49,6 +49,7 @@ pub const ncclUniqueId = extern struct {
 pub extern fn ncclGetUniqueId(uniqueId: *ncclUniqueId) ncclResult_t;
 pub extern fn ncclCommInitRank(comm: **ncclComm, nranks: c_int, commId: ncclUniqueId, rank: c_int) ncclResult_t;
 pub extern fn ncclCommDestroy(comm: *ncclComm) ncclResult_t;
+pub extern fn ncclCommFinalize(comm: *ncclComm) ncclResult_t;
 pub extern fn ncclCommCount(comm: *const ncclComm, count: *c_int) ncclResult_t;
 pub extern fn ncclCommCuDevice(comm: *const ncclComm, device: *c_int) ncclResult_t;
 pub extern fn ncclCommUserRank(comm: *const ncclComm, rank: *c_int) ncclResult_t;

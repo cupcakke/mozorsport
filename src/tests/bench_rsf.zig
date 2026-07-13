@@ -1,5 +1,6 @@
 const std = @import("std");
 const deps = @import("deps");
+const core = deps.core_tensor;
 const RSF = deps.rsf.RSF;
 const Tensor = deps.core_tensor.Tensor;
 
@@ -18,6 +19,10 @@ pub fn main() !void {
         }
     }
     const allocator = gpa.allocator();
+
+    const eff = core.effectiveCpuCount();
+    const src = core.cgroupSource();
+    std.debug.print("[env] effective_cpu={d} cgroup_source={s}\n", .{ eff, src });
 
     std.debug.print("\n================================================================================\n", .{});
     std.debug.print("BENCHMARK: RSF Forward/Backward Pass\n", .{});
@@ -110,6 +115,28 @@ pub fn main() !void {
     std.debug.print("--------------------------------------------------------------------------------\n", .{});
 
     // --- Correctness check ---
+    {
+        var diag = try Tensor.init(allocator, &input_shape);
+        defer diag.deinit();
+        @memcpy(diag.data[0..diag.shape.totalSize()], x.data[0..x.shape.totalSize()]);
+        try model.forwardCPU(&diag);
+        try model.inverse(&diag);
+        var max_abs: f32 = 0.0;
+        var max_rel: f32 = 0.0;
+        var idx: usize = 0;
+        while (idx < x.shape.totalSize()) : (idx += 1) {
+            const av = x.data[idx];
+            const bv = diag.data[idx];
+            const d = @abs(av - bv);
+            if (d > max_abs) max_abs = d;
+            const denom = @max(@abs(av), @abs(bv));
+            if (denom > 0) {
+                const r = d / denom;
+                if (r > max_rel) max_rel = r;
+            }
+        }
+        std.debug.print("[diagnostic] max_abs_diff={e} max_rel_diff={e}\n", .{ max_abs, max_rel });
+    }
     const invertible = try model.verifyInvertible(&x, 1e-4, 1e-4);
     if (invertible) {
         std.debug.print("RESULT: PASS\n", .{});

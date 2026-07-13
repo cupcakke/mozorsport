@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 const mem = std.mem;
 const math = std.math;
 const Allocator = mem.Allocator;
@@ -10,6 +11,59 @@ const memory = @import("memory.zig");
 const alignment = 32;
 const vector_width = 8;
 const Vec8 = @Vector(vector_width, f32);
+
+fn readSmallFile(path: []const u8, buf: []u8) ?[]const u8 {
+    const file = std.fs.openFileAbsolute(path, .{}) catch return null;
+    defer file.close();
+    const n = file.read(buf) catch return null;
+    if (n == 0) return null;
+    return mem.trim(u8, buf[0..n], " \n\t\r");
+}
+
+fn cgroupV2CpuCount() ?usize {
+    var buf: [128]u8 = undefined;
+    const content = readSmallFile("/sys/fs/cgroup/cpu.max", &buf) orelse return null;
+    var it = mem.splitScalar(u8, content, ' ');
+    const quota_str = it.next() orelse return null;
+    const period_str = it.next() orelse return null;
+    if (mem.eql(u8, quota_str, "max")) return null;
+    const quota = std.fmt.parseInt(i64, quota_str, 10) catch return null;
+    const period = std.fmt.parseInt(i64, period_str, 10) catch return null;
+    if (quota <= 0 or period <= 0) return null;
+    const cpus = @divTrunc(quota, period);
+    if (cpus < 1) return 1;
+    return @intCast(cpus);
+}
+
+fn cgroupV1CpuCount() ?usize {
+    var qbuf: [64]u8 = undefined;
+    const quota_str = readSmallFile("/sys/fs/cgroup/cpu/cpu.cfs_quota_us", &qbuf) orelse return null;
+    const quota = std.fmt.parseInt(i64, quota_str, 10) catch return null;
+    if (quota <= 0) return null;
+    var pbuf: [64]u8 = undefined;
+    const period_str = readSmallFile("/sys/fs/cgroup/cpu/cpu.cfs_period_us", &pbuf) orelse return null;
+    const period = std.fmt.parseInt(i64, period_str, 10) catch return null;
+    if (period <= 0) return null;
+    const cpus = @divTrunc(quota, period);
+    if (cpus < 1) return 1;
+    return @intCast(cpus);
+}
+
+pub fn cgroupSource() []const u8 {
+    if (builtin.os.tag != .linux) return "fallback";
+    if (cgroupV2CpuCount() != null) return "cgroup_v2";
+    if (cgroupV1CpuCount() != null) return "cgroup_v1";
+    return "fallback";
+}
+
+pub fn effectiveCpuCount() usize {
+    if (builtin.os.tag == .linux) {
+        if (cgroupV2CpuCount()) |c| return math.clamp(c, 1, 8);
+        if (cgroupV1CpuCount()) |c| return math.clamp(c, 1, 8);
+    }
+    const host = std.Thread.getCpuCount() catch 1;
+    return math.clamp(@max(host, 1), 1, 8);
+}
 
 pub const TensorIterator = struct {
     shape: *const Shape,
@@ -50,6 +104,7 @@ pub const Shape = struct {
     dims: []usize,
     strides: []usize,
     total_size: usize,
+    freed: std.atomic.Value(bool) = std.atomic.Value(bool).init(false),
 
     pub fn init(allocator: Allocator, dims_in: []const usize) !Shape {
         if (dims_in.len == 0 or dims_in.len > 8) return Error.InvalidShape;
@@ -94,9 +149,15 @@ pub const Shape = struct {
     }
 
     pub fn deinit(self: *Shape, allocator: Allocator) void {
+        // A Shape can be reached by more than one release() call -- e.g. when a
+        // Tensor is retained and released in place across multiple threads (see
+        // Tensor.release) -- so freeing must be a thread-safe, idempotent,
+        // exactly-once operation on the same Shape instance.
+        if (self.freed.cmpxchgStrong(false, true, .acq_rel, .acquire) != null) {
+            return;
+        }
         allocator.free(self.dims);
         allocator.free(self.strides);
-        self.* = undefined;
     }
 
     pub fn copy(self: *const Shape, allocator: Allocator) !Shape {
@@ -199,14 +260,23 @@ pub const Tensor = struct {
     }
 
     pub fn release(self: *Tensor) void {
+        // Each Tensor value (base or view) owns its own Shape independently of
+        // the shared refcount, so its Shape must always be freed here (Shape.deinit
+        // is idempotent, so repeated release() calls on the very same struct
+        // instance -- e.g. retain()/release() pairs used directly without
+        // creating a new view -- are safe).
         self.shape.deinit(self.allocator);
         const old = @atomicRmw(usize, self.refcount, .Sub, 1, .acq_rel);
         if (old == 1) {
             self.allocator.free(self.base_data);
             self.allocator.destroy(self.refcount);
             self.allocator.destroy(self.cow);
+            // Only fully invalidate the struct once the underlying shared
+            // data is actually gone -- a non-final release (old != 1) must
+            // leave refcount/cow/data/allocator valid, since other holders
+            // (or this same value, if retained again) still depend on them.
+            self.* = undefined;
         }
-        self.* = undefined;
     }
 
     pub fn deinit(self: *Tensor) void {
@@ -1020,7 +1090,7 @@ pub const Tensor = struct {
                 }
             }
         };
-        const thread_count = @min(@max(std.Thread.getCpuCount() catch 1, 1), @min(m, 8));
+        const thread_count = @min(effectiveCpuCount(), @min(m, 8));
         if (thread_count <= 1) {
             Worker.run(&a_contiguous, &b_transposed, &result, 0, m, k, n);
         } else {

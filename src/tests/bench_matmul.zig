@@ -1,6 +1,7 @@
 const std = @import("std");
 const deps = @import("deps");
-const Tensor = deps.sfd.Tensor;
+const core = deps.core_tensor;
+const Tensor = deps.core_tensor.Tensor;
 
 const SIZES = [_]usize{ 128, 256, 512, 1024 };
 const BENCH_ITERS: usize = 100;
@@ -23,6 +24,10 @@ pub fn main() !void {
     }
     const allocator = gpa.allocator();
 
+    const eff = core.effectiveCpuCount();
+    const src = core.cgroupSource();
+    std.debug.print("[env] effective_cpu={d} cgroup_source={s}\n", .{ eff, src });
+
     std.debug.print("\n================================================================================\n", .{});
     std.debug.print("BENCHMARK: Matrix Multiplication (cache-friendly i-p-j)\n", .{});
     std.debug.print("================================================================================\n", .{});
@@ -39,24 +44,22 @@ pub fn main() !void {
         defer a.deinit();
         var b = try Tensor.init(allocator, &dims);
         defer b.deinit();
-        var c = try Tensor.init(allocator, &dims);
-        defer c.deinit();
 
         const fill_val: f32 = 1.0 / @as(f32, @floatFromInt(n));
-        a.fill(fill_val);
-        b.fill(fill_val);
+        try a.fill(fill_val);
+        try b.fill(fill_val);
 
-        // Warmup
         var w: usize = 0;
         while (w < BENCH_WARMUP) : (w += 1) {
-            try c.matmul(&a, &b);
+            var r = try Tensor.matmul(&a, &b, allocator);
+            r.deinit();
         }
 
-        // Timed
         var timer = try std.time.Timer.start();
         var iter: usize = 0;
         while (iter < BENCH_ITERS) : (iter += 1) {
-            try c.matmul(&a, &b);
+            var r = try Tensor.matmul(&a, &b, allocator);
+            r.deinit();
         }
         const elapsed_ns = timer.read();
         const elapsed_ms = @as(f64, @floatFromInt(elapsed_ns)) / 1_000_000.0;
@@ -80,7 +83,6 @@ pub fn main() !void {
         std.debug.print("--------------------------------------------------------------------------------\n", .{});
     }
 
-    // Summary table
     std.debug.print("\nSummary:\n", .{});
     std.debug.print("  {s:>8}  {s:>12}  {s:>10}\n", .{ "Size", "ms/iter", "GFLOPS" });
     for (results) |r| {
@@ -89,4 +91,3 @@ pub fn main() !void {
     std.debug.print("--------------------------------------------------------------------------------\n", .{});
     std.debug.print("RESULT: PASS\n", .{});
 }
-

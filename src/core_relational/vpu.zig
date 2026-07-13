@@ -1115,15 +1115,15 @@ pub const RelationalVectorOps = struct {
         const pd = n1.phase - n2.phase;
         const phase_diff = if (pd >= 0) pd else -pd;
         const normalized_phase = @min(phase_diff, 2.0 * std.math.pi) / (2.0 * std.math.pi);
-        const md = n1.magnitude - n2.magnitude;
+        const md = n1.magnitude() - n2.magnitude();
         const mag_diff = if (md >= 0) md else -md;
-        const abs_n1 = if (n1.magnitude >= 0) n1.magnitude else -n1.magnitude;
-        const abs_n2 = if (n2.magnitude >= 0) n2.magnitude else -n2.magnitude;
+        const abs_n1 = if (n1.magnitude() >= 0) n1.magnitude() else -n1.magnitude();
+        const abs_n2 = if (n2.magnitude() >= 0) n2.magnitude() else -n2.magnitude();
         const max_mag = @max(abs_n1, abs_n2);
         const normalized_mag = if (max_mag > 0) mag_diff / max_mag else 0.0;
-        const n1_mag = n1.quantum_state.magnitude();
-        const n2_mag = n2.quantum_state.magnitude();
-        const inner_prod = n1.quantum_state.mul(n2.quantum_state.conjugate()).magnitude();
+        const n1_mag = n1.quantumState().magnitude();
+        const n2_mag = n2.quantumState().magnitude();
+        const inner_prod = n1.quantumState().mul(n2.quantumState().conjugate()).magnitude();
         const normalized_quantum = if (n1_mag > 0 and n2_mag > 0)
             inner_prod / (n1_mag * n2_mag)
         else
@@ -1167,9 +1167,9 @@ pub const RelationalVectorOps = struct {
             if (graph.nodes.getPtr(key)) |node| {
                 const vec = F64x4.initFromArray(.{
                     node.phase,
-                    node.magnitude,
-                    node.quantum_state.re,
-                    node.quantum_state.im,
+                    node.magnitude(),
+                    node.quantumState().re,
+                    node.quantumState().im,
                 });
                 try embeddings.append(vec);
             }

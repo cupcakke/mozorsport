@@ -794,7 +794,7 @@ pub const DistributedTrainerFuthark = struct {
     }
 
     fn captureLayerSnapshots(self: *DistributedTrainerFuthark) ![]LayerSnapshot {
-        var snapshots = try self.allocator.alloc(LayerSnapshot, self.num_layers);
+        const snapshots = try self.allocator.alloc(LayerSnapshot, self.num_layers);
         var initialized_count: usize = 0;
         errdefer {
             var idx: usize = 0;
@@ -1345,7 +1345,7 @@ pub const DistributedTrainerFuthark = struct {
             };
         }
 
-        var snapshots = try self.captureLayerSnapshots();
+        const snapshots = try self.captureLayerSnapshots();
         defer self.freeLayerSnapshots(snapshots);
 
         const local_loss_f16 = try self.accelerator.trainingStep(&inputs, &targets, learning_rate_f16, momentum_f16);
@@ -1359,13 +1359,13 @@ pub const DistributedTrainerFuthark = struct {
 
         if (global_token_count_f32 > 0.0) {
             for (snapshots, 0..) |snapshot, layer_index| {
-                var current_ws = try self.readLayerMatrix(layer_index, .weights_s);
+                const current_ws = try self.readLayerMatrix(layer_index, .weights_s);
                 defer self.allocator.free(current_ws);
-                var current_wt = try self.readLayerMatrix(layer_index, .weights_t);
+                const current_wt = try self.readLayerMatrix(layer_index, .weights_t);
                 defer self.allocator.free(current_wt);
-                var current_vs = try self.readLayerMatrix(layer_index, .velocity_s);
+                const current_vs = try self.readLayerMatrix(layer_index, .velocity_s);
                 defer self.allocator.free(current_vs);
-                var current_vt = try self.readLayerMatrix(layer_index, .velocity_t);
+                const current_vt = try self.readLayerMatrix(layer_index, .velocity_t);
                 defer self.allocator.free(current_vt);
 
                 try subtractLayerSnapshot(current_ws, snapshot.weights_s);
@@ -1618,7 +1618,7 @@ pub const DistributedTrainerFuthark = struct {
         const columns = try std.math.add(usize, half, 1);
         const expected_length = try std.math.mul(usize, half, columns);
 
-        var snapshots = try self.allocator.alloc(LayerSnapshot, self.num_layers);
+        const snapshots = try self.allocator.alloc(LayerSnapshot, self.num_layers);
         var snapshots_initialized: usize = 0;
         var snapshots_committed = false;
         errdefer if (!snapshots_committed) {
@@ -2044,7 +2044,7 @@ pub const DistributedTrainerFuthark = struct {
             try std.math.mul(usize, effective_batch_size, max_sequence_length),
             self.model_dim,
         );
-        var host_gradient = try self.allocator.alloc(f16, total_elements);
+        const host_gradient = try self.allocator.alloc(f16, total_elements);
         defer self.allocator.free(host_gradient);
 
         const copy_result = futhark.futhark_values_f16_3d(futhark_context, gradient_pointer, @ptrCast(host_gradient.ptr));
@@ -2266,7 +2266,7 @@ pub const DistributedTrainerFuthark = struct {
                 };
 
                 if (index_created) {
-                    var location_opt: ?PatternLocation = PatternLocation.init(
+                    const location_opt: ?PatternLocation = PatternLocation.init(
                         self.allocator,
                         tid,
                         0,

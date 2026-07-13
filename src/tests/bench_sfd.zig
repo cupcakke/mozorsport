@@ -1,5 +1,6 @@
 const std = @import("std");
 const deps = @import("deps");
+const core = deps.core_tensor;
 const Tensor = deps.sfd.Tensor;
 const SpectralNormalizer = deps.sfd.SpectralNormalizer;
 
@@ -39,6 +40,10 @@ pub fn main() !void {
         }
     }
     const allocator = gpa.allocator();
+
+    const eff = core.effectiveCpuCount();
+    const src = core.cgroupSource();
+    std.debug.print("[env] effective_cpu={d} cgroup_source={s}\n", .{ eff, src });
 
     std.debug.print("\n================================================================================\n", .{});
     std.debug.print("BENCHMARK: SFD Optimizations (FP4 quantization + SpectralNorm)\n", .{});

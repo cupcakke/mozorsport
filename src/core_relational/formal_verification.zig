@@ -1380,7 +1380,7 @@ fn checkConnectivityPredicate(graph: *const SelfSimilarRelationalGraph) Verifica
         return true;
     }
     while (queue.items.len > 0) {
-        const current = queue.pop();
+        const current = queue.pop().?;
         if (visited.contains(current)) {
             continue;
         }
@@ -2554,10 +2554,10 @@ pub const FormalVerificationEngine = struct {
         self.total_verifications += 1;
         var hash_buf: [32]u8 = undefined;
         var hasher = Sha256.init(.{});
-        hasher.update(graph.getTopologyHashHex());
-        var node_count_u64 = std.math.cast(u64, graph.nodes.count()) catch unreachable;
+        hasher.update(try @constCast(graph).getTopologyHashHex());
+        var node_count_u64 = std.math.cast(u64, graph.nodes.count()) orelse unreachable;
         hasher.update(std.mem.asBytes(&node_count_u64));
-        var edge_count_u64 = std.math.cast(u64, graph.edges.count()) catch unreachable;
+        var edge_count_u64 = std.math.cast(u64, graph.edges.count()) orelse unreachable;
         hasher.update(std.mem.asBytes(&edge_count_u64));
         hasher.final(&hash_buf);
         self.invariant_registry.resetAllViolationCounts();

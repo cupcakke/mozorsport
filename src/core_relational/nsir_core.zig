@@ -154,6 +154,14 @@ pub const Node = struct {
         };
     }
 
+    pub fn magnitude(self: Node) f64 {
+        return @sqrt(self.qubit.normSquared());
+    }
+
+    pub fn quantumState(self: Node) Complex(f64) {
+        return self.qubit.a;
+    }
+
     pub fn deinit(self: *Node) void {
         self.allocator.free(self.id);
         self.allocator.free(self.data);

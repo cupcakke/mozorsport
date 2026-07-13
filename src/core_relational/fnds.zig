@@ -1514,7 +1514,9 @@ pub fn CoalescedHashMap(comptime K: type, comptime V: type) type {
             return std.meta.eql(a, b);
         }
 
-        pub fn put(self: *Self, key: K, value: V) !void {
+        const PutError = FNDSError || Allocator.Error;
+
+        pub fn put(self: *Self, key: K, value: V) PutError!void {
             if (self.cellar_start == 0) return FNDSError.InvalidCapacity;
             if (self.load_factor >= self.max_load_factor) {
                 try self.resize(satAddUsize(self.capacity, self.capacity));
@@ -1522,7 +1524,7 @@ pub fn CoalescedHashMap(comptime K: type, comptime V: type) type {
             try self.putInternal(key, value);
         }
 
-        fn putInternal(self: *Self, key: K, value: V) !void {
+        fn putInternal(self: *Self, key: K, value: V) PutError!void {
             const index = self.hash(key) % self.cellar_start;
 
             if (self.buckets[index] == null) {
@@ -1659,7 +1661,7 @@ pub fn CoalescedHashMap(comptime K: type, comptime V: type) type {
             return false;
         }
 
-        pub fn resize(self: *Self, new_capacity: usize) !void {
+        pub fn resize(self: *Self, new_capacity: usize) PutError!void {
             const min_required = satAddUsize(self.size, 1);
             const target = @max(new_capacity, satAddUsize(min_required, min_required));
             const capacity = @max(target, 8);

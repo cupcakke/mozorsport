@@ -506,7 +506,7 @@ test "signal_propagation_basic" {
     const n2 = try Node.init(allocator, "n2", "data2", Qubit.initBasis1(), 0.0);
     try graph.addNode(n2);
 
-    const e1 = Edge.init(allocator, "n1", "n2", .coherent, 0.9, Complex(f64).init(0.5, 0.5), 1.2);
+    const e1 = try Edge.init(allocator, "n1", "n2", .coherent, 0.9, Complex(f64).init(0.5, 0.5), 1.2);
     try graph.addEdge("n1", "n2", e1);
 
     var analyzer = DataFlowAnalyzer.init(allocator);
@@ -535,7 +535,7 @@ test "signal_propagation_inference_hooks" {
     const n2 = try Node.init(allocator, "n2", "data2", Qubit.initBasis1(), 0.0);
     try graph.addNode(n2);
 
-    const e1 = Edge.init(allocator, "n1", "n2", .coherent, 0.9, Complex(f64).init(0.5, 0.5), 1.2);
+    const e1 = try Edge.init(allocator, "n1", "n2", .coherent, 0.9, Complex(f64).init(0.5, 0.5), 1.2);
     try graph.addEdge("n1", "n2", e1);
 
     var analyzer = DataFlowAnalyzer.init(allocator);
@@ -564,7 +564,7 @@ test "signal_propagation_qubit_normalization" {
     const n2 = try Node.init(allocator, "n2", "data2", Qubit.initBasis1(), 0.0);
     try graph.addNode(n2);
 
-    const e1 = Edge.init(allocator, "n1", "n2", .coherent, 0.9, Complex(f64).init(0.5, 0.5), 1.2);
+    const e1 = try Edge.init(allocator, "n1", "n2", .coherent, 0.9, Complex(f64).init(0.5, 0.5), 1.2);
     try graph.addEdge("n1", "n2", e1);
 
     var analyzer = DataFlowAnalyzer.init(allocator);

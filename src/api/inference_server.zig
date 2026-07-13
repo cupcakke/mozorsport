@@ -505,12 +505,16 @@ pub const InferenceServer = struct {
         }
         const fv_ptr = self.allocator.create(FormalVerificationEngine) catch null;
         if (fv_ptr) |fv| {
-            fv.* = FormalVerificationEngine.init(self.allocator);
-            self.formal_verifier = fv;
+            if (FormalVerificationEngine.init(self.allocator)) |fv_val| {
+                fv.* = fv_val;
+                self.formal_verifier = fv;
+            } else |_| {
+                self.allocator.destroy(fv);
+            }
         }
         const se_ptr = self.allocator.create(SecurityProofEngine) catch null;
         if (se_ptr) |se| {
-            se.* = SecurityProofEngine.init(self.allocator);
+            se.* = try SecurityProofEngine.init(self.allocator, .INTERNAL);
             self.security_engine = se;
         }
         if (self.nsir_graph) |*graph| {
@@ -607,7 +611,7 @@ pub const InferenceServer = struct {
     fn setSocketTimeout(stream: net.Stream, timeout_ms: u64) void {
         const sec: i64 = @intCast(timeout_ms / 1000);
         const usec: i64 = @intCast((timeout_ms % 1000) * 1000);
-        var tv = std.posix.timeval{ .tv_sec = sec, .tv_usec = usec };
+        var tv = std.posix.timeval{ .sec = sec, .usec = usec };
         const optval = std.mem.asBytes(&tv);
         _ = std.posix.setsockopt(stream.handle, std.posix.SOL.SOCKET, std.posix.SO.RCVTIMEO, optval) catch {};
     }

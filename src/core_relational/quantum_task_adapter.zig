@@ -33,7 +33,7 @@ pub const QuantumSubgraph = struct {
             .edge_keys = ArrayList(nsir.EdgeKey).init(allocator),
             .total_entanglement = 0.0,
             .avg_fractal_dimension = 0.0,
-            .subgraph_id = @as(u64, @truncate(@as(u128, @bitCast(@as(i64, @truncate(std.time.nanoTimestamp())))))),
+            .subgraph_id = @as(u64, @bitCast(@as(i64, @truncate(std.time.nanoTimestamp())))),
             .semantic_cluster_id = 0,
             .allocator = allocator,
         };
@@ -203,7 +203,7 @@ pub const QuantumTaskAdapter = struct {
             for (entry.value_ptr.items) |edge| {
                 const correlation = edge.quantum_correlation.magnitude();
                 if (correlation > self.entanglement_threshold and edge.fractal_dimension > self.fractal_threshold) {
-                    const cluster_key = try semanticClusterKey(self.allocator, edge);
+                    const cluster_key = try semanticClusterKey(self.allocator, &edge);
                     errdefer self.allocator.free(cluster_key);
 
                     var result = try node_clusters.getOrPut(cluster_key);
@@ -443,7 +443,7 @@ test "quantum_task_adapter_identify_subgraphs" {
     const n2 = try Node.init(allocator, "n2", "data2", Qubit{ .a = Complex(f64).init(0.6, 0.8), .b = Complex(f64).init(0.0, 0.0) }, 0.3);
     try graph.addNode(n2);
 
-    const e1 = Edge.init(allocator, "n1", "n2", .entangled, 0.9, Complex(f64).init(0.8, 0.8), 2.0);
+    const e1 = try Edge.init(allocator, "n1", "n2", .entangled, 0.9, Complex(f64).init(0.8, 0.8), 2.0);
     try graph.addEdge("n1", "n2", e1);
 
     var adapter = QuantumTaskAdapter.init(allocator, &graph);

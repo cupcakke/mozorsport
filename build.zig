@@ -9,11 +9,17 @@ pub fn build(b: *std.Build) void {
     const verify_enabled = b.option(bool, "verify", "Run Lean verification") orelse false;
     const rtl_enabled = b.option(bool, "rtl", "Compile Haskell RTL simulation") orelse false;
 
-    const build_options = b.addOptions();
-    build_options.addOption(bool, "gpu_acceleration", gpu_enabled);
-    build_options.addOption(bool, "zk_enabled", zk_enabled);
-    build_options.addOption(bool, "verify_enabled", verify_enabled);
-    build_options.addOption(bool, "rtl_enabled", rtl_enabled);
+    const cpu_build_options = b.addOptions();
+    cpu_build_options.addOption(bool, "gpu_acceleration", false);
+    cpu_build_options.addOption(bool, "zk_enabled", zk_enabled);
+    cpu_build_options.addOption(bool, "verify_enabled", verify_enabled);
+    cpu_build_options.addOption(bool, "rtl_enabled", rtl_enabled);
+
+    const gpu_build_options = b.addOptions();
+    gpu_build_options.addOption(bool, "gpu_acceleration", gpu_enabled);
+    gpu_build_options.addOption(bool, "zk_enabled", zk_enabled);
+    gpu_build_options.addOption(bool, "verify_enabled", verify_enabled);
+    gpu_build_options.addOption(bool, "rtl_enabled", rtl_enabled);
 
     const futhark_c = b.path("src/hw/accel/futhark_kernels.c");
     const futhark_gpu_c = b.path("src/hw/accel/main_gpu.c");
@@ -26,7 +32,7 @@ pub fn build(b: *std.Build) void {
     });
 
     const futhark_gpu_step = b.addSystemCommand(&.{
-        "futhark", "opencl", "--library",
+        "futhark", "cuda", "--library",
         "src/hw/accel/main.fut",
         "-o",      "src/hw/accel/main_gpu",
     });
@@ -44,11 +50,11 @@ pub fn build(b: *std.Build) void {
         .optimize = optimize,
     });
     inference_server_exe.linkLibC();
-    inference_server_exe.addCSourceFile(.{ .file = futhark_c, .flags = &.{"-O2"} });
     inference_server_exe.addIncludePath(futhark_include);
-    inference_server_exe.root_module.addOptions("build_options", build_options);
-    inference_server_exe.root_module.addImport("core_relational", core_relational_mod);
+    inference_server_exe.addCSourceFile(.{ .file = futhark_c, .flags = &.{"-O2"} });
     inference_server_exe.step.dependOn(&futhark_cpu_step.step);
+    inference_server_exe.root_module.addOptions("build_options", cpu_build_options);
+    inference_server_exe.root_module.addImport("core_relational", core_relational_mod);
     b.installArtifact(inference_server_exe);
 
     if (gpu_enabled) {
@@ -59,8 +65,14 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         });
         distributed_futhark_exe.linkLibC();
+        // The CUDA-generated library (main_gpu.c, compiled via `futhark cuda
+        // --library` from main.fut) already contains every GPU entry point the
+        // distributed trainer needs and re-uses the same futhark_context_* and
+        // futhark_entry_* symbol names as the CPU library generated from
+        // futhark_kernels.fut. Linking both object files into the same binary
+        // is therefore a duplicate-symbol linker error, not a missing-symbol
+        // one, so only the CUDA library is linked here.
         distributed_futhark_exe.addCSourceFile(.{ .file = futhark_gpu_c, .flags = &.{"-O2"} });
-        distributed_futhark_exe.addCSourceFile(.{ .file = futhark_c, .flags = &.{"-O2"} });
         distributed_futhark_exe.addIncludePath(futhark_include);
         distributed_futhark_exe.addIncludePath(.{ .cwd_relative = "/usr/local/cuda/include" });
         distributed_futhark_exe.addLibraryPath(.{ .cwd_relative = "/usr/local/cuda/lib64" });
@@ -69,9 +81,11 @@ pub fn build(b: *std.Build) void {
         distributed_futhark_exe.linkSystemLibrary("cudart");
         distributed_futhark_exe.linkSystemLibrary("nvrtc");
         distributed_futhark_exe.linkSystemLibrary("nccl");
-        distributed_futhark_exe.root_module.addOptions("build_options", build_options);
+        distributed_futhark_exe.linkSystemLibrary("m");
+        distributed_futhark_exe.linkSystemLibrary("pthread");
+        distributed_futhark_exe.linkSystemLibrary("dl");
+        distributed_futhark_exe.root_module.addOptions("build_options", gpu_build_options);
         distributed_futhark_exe.root_module.addImport("core_relational", core_relational_mod);
-        distributed_futhark_exe.step.dependOn(&futhark_cpu_step.step);
         distributed_futhark_exe.step.dependOn(&futhark_gpu_step.step);
         b.installArtifact(distributed_futhark_exe);
 
@@ -114,7 +128,11 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
         });
-        t.root_module.addOptions("build_options", build_options);
+        t.linkLibC();
+        t.addCSourceFile(.{ .file = futhark_c, .flags = &.{"-O2"} });
+        t.addIncludePath(futhark_include);
+        t.step.dependOn(&futhark_cpu_step.step);
+        t.root_module.addOptions("build_options", cpu_build_options);
         const run = b.addRunArtifact(t);
         const step = b.step(spec.step, spec.desc);
         step.dependOn(&run.step);
@@ -194,7 +212,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    bench_deps.addOptions("build_options", build_options);
+    bench_deps.addOptions("build_options", cpu_build_options);
 
     const bench_step = b.step("bench", "Run all benchmarks");
 
@@ -213,11 +231,11 @@ pub fn build(b: *std.Build) void {
             .optimize = optimize,
         });
         exe.linkLibC();
-        exe.addCSourceFile(.{ .file = futhark_c, .flags = &.{"-O2"} });
         exe.addIncludePath(futhark_include);
-        exe.root_module.addOptions("build_options", build_options);
-        exe.root_module.addImport("deps", bench_deps);
+        exe.addCSourceFile(.{ .file = futhark_c, .flags = &.{"-O2"} });
         exe.step.dependOn(&futhark_cpu_step.step);
+        exe.root_module.addOptions("build_options", cpu_build_options);
+        exe.root_module.addImport("deps", bench_deps);
         b.installArtifact(exe);
         const run = b.addRunArtifact(exe);
         bench_step.dependOn(&run.step);

@@ -1,6 +1,6 @@
 const _build_gpu_enabled: bool = blk: {
     const opts = @import("build_options");
-    if (@hasDecl(@TypeOf(opts), "gpu_acceleration")) break :blk opts.gpu_acceleration;
+    if (@hasDecl(opts, "gpu_acceleration")) break :blk opts.gpu_acceleration;
     break :blk false;
 };
 

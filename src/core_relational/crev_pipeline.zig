@@ -1313,12 +1313,12 @@ pub const CREVPipeline = struct {
             triplets.deinit();
         }
 
-        var lines = std.mem.split(u8, data, "\n");
+        var lines = std.mem.splitSequence(u8, data, "\n");
         while (lines.next()) |line| {
             const trimmed = std.mem.trim(u8, line, " \t\r");
             if (trimmed.len == 0) continue;
 
-            var parts = std.mem.split(u8, trimmed, ",");
+            var parts = std.mem.splitSequence(u8, trimmed, ",");
             var fields = ArrayList([]const u8).init(self.allocator);
             defer fields.deinit();
 
@@ -1364,7 +1364,7 @@ pub const CREVPipeline = struct {
             triplets.deinit();
         }
 
-        var lines = std.mem.split(u8, metadata, "\n");
+        var lines = std.mem.splitSequence(u8, metadata, "\n");
         while (lines.next()) |line| {
             const trimmed = std.mem.trim(u8, line, " \t\r");
             if (trimmed.len == 0) continue;

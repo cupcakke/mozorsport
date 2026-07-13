@@ -352,16 +352,66 @@ pub const Tensor = struct {
 
         self.fill(0.0);
 
-        var i: usize = 0;
-        while (i < m) : (i += 1) {
-            var p: usize = 0;
-            while (p < k) : (p += 1) {
-                const a_val: f64 = @as(f64, A.data[i * k + p]);
-                var j: usize = 0;
-                while (j < n) : (j += 1) {
-                    self.data[i * n + j] += @floatCast(a_val * @as(f64, B.data[p * n + j]));
+        const b_transposed = try self.allocator.alignedAlloc(f32, @as(?u29, 32), n * k);
+        defer self.allocator.free(b_transposed);
+        var pi: usize = 0;
+        while (pi < k) : (pi += 1) {
+            var ji: usize = 0;
+            while (ji < n) : (ji += 1) {
+                b_transposed[ji * k + pi] = B.data[pi * n + ji];
+            }
+        }
+
+        const SfdMatmulVecWidth = 8;
+        const SfdMatmulVec8 = @Vector(SfdMatmulVecWidth, f32);
+        const SfdMatmulBlock: usize = 32;
+
+        const Worker = struct {
+            fn run(a_ptr: []const f32, bt_ptr: []const f32, out_ptr: []f32, start: usize, end: usize, k_dim: usize, n_dim: usize) void {
+                var ii: usize = start;
+                while (ii < end) : (ii += SfdMatmulBlock) {
+                    const i_end = @min(ii + SfdMatmulBlock, end);
+                    var jj: usize = 0;
+                    while (jj < n_dim) : (jj += SfdMatmulBlock) {
+                        const j_end = @min(jj + SfdMatmulBlock, n_dim);
+                        var i: usize = ii;
+                        while (i < i_end) : (i += 1) {
+                            var j: usize = jj;
+                            while (j < j_end) : (j += 1) {
+                                var accumulator: SfdMatmulVec8 = @splat(0.0);
+                                var kk: usize = 0;
+                                const limit = k_dim - k_dim % SfdMatmulVecWidth;
+                                while (kk < limit) : (kk += SfdMatmulVecWidth) {
+                                    const av: SfdMatmulVec8 = a_ptr[i * k_dim + kk ..][0..SfdMatmulVecWidth].*;
+                                    const bv: SfdMatmulVec8 = bt_ptr[j * k_dim + kk ..][0..SfdMatmulVecWidth].*;
+                                    accumulator += av * bv;
+                                }
+                                var sum_value: f32 = @reduce(.Add, accumulator);
+                                while (kk < k_dim) : (kk += 1) {
+                                    sum_value += a_ptr[i * k_dim + kk] * bt_ptr[j * k_dim + kk];
+                                }
+                                out_ptr[i * n_dim + j] = sum_value;
+                            }
+                        }
+                    }
                 }
             }
+        };
+
+        const thread_count = @min(core_tensor.effectiveCpuCount(), @min(m, 8));
+        if (thread_count <= 1) {
+            Worker.run(A.data, b_transposed, self.data, 0, m, k, n);
+        } else {
+            var threads: [8]std.Thread = undefined;
+            var active: usize = 0;
+            const chunk = (m + thread_count - 1) / thread_count;
+            var start: usize = 0;
+            while (start < m and active < thread_count) : (start += chunk) {
+                const end = @min(start + chunk, m);
+                threads[active] = try std.Thread.spawn(.{}, Worker.run, .{ A.data, b_transposed, self.data, start, end, k, n });
+                active += 1;
+            }
+            for (threads[0..active]) |thread| thread.join();
         }
     }
 

@@ -1,5 +1,6 @@
 const std = @import("std");
 const deps = @import("deps");
+const core = deps.core_tensor;
 const Tensor = deps.core_tensor.Tensor;
 
 const TENSOR_SIZE: usize = 1 << 22; // 4M elements
@@ -116,6 +117,10 @@ pub fn main() !void {
         }
     }
     const allocator = gpa.allocator();
+
+    const eff = core.effectiveCpuCount();
+    const src = core.cgroupSource();
+    std.debug.print("[env] effective_cpu={d} cgroup_source={s}\n", .{ eff, src });
 
     std.debug.print("\n================================================================================\n", .{});
     std.debug.print("BENCHMARK: Tensor Element-wise Operations (contiguous fast path)\n", .{});
