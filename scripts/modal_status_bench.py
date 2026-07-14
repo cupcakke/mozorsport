@@ -4,7 +4,7 @@ import shutil
 import subprocess
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import modal
 
@@ -499,6 +499,15 @@ def run_gpu_train_and_infer(
                 except (ValueError, IndexError):
                     pass
 
+        metrics_path = Path("/checkpoints/training_metrics.json")
+        training_metrics_json: Optional[Dict[str, Any]] = None
+        if metrics_path.exists():
+            try:
+                training_metrics_json = json.loads(metrics_path.read_text(encoding="utf-8"))
+                _write_report(report_dir, "training_metrics.json", metrics_path.read_text(encoding="utf-8"))
+            except (json.JSONDecodeError, OSError) as exc:
+                _log(f"WARN: failed to read training_metrics.json: {exc}")
+
         result["phases"]["C_training_convergence"] = {
             "returncode": rc_c,
             "duration_s": round(phase_c_duration, 2),
@@ -507,6 +516,7 @@ def run_gpu_train_and_infer(
             "first_loss": loss_curve[0][1] if loss_curve else None,
             "last_loss": loss_curve[-1][1] if loss_curve else None,
             "epoch_metrics": epoch_metrics,
+            "training_metrics_json": training_metrics_json,
             "converged": (
                 len(loss_curve) >= 2 and loss_curve[-1][1] < loss_curve[0][1]
             ) if loss_curve else False,

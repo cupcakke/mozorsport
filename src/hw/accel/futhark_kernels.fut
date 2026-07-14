@@ -432,7 +432,7 @@ let rgpu_canonical_form_signature [num_edges] (num_nodes: i64) (edge_sources: [n
   let edge_count_hash = u64.i64 num_edges * 999983u64
   in degree_hash ^ in_degree_hash ^ quality_hash ^ node_count_hash ^ edge_count_hash
 
-let rgpu_compute_fractal_dimension [num_nodes][num_edges] (node_hashes: [num_nodes]u64) (edge_sources: [num_edges]i64) (edge_targets: [num_edges]i64): f32 =
+let rgpu_compute_fractal_dimension [num_nodes][num_edges] (node_hashes: [num_nodes]u64) (edge_sources: [num_edges]i64) (_edge_targets: [num_edges]i64): f32 =
   if num_nodes < 2 then 1f32
   else
     let safe_src = map (\s -> if s >= 0 && s < num_nodes then s else 0i64) edge_sources

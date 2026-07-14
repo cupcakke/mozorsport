@@ -111,13 +111,8 @@ pub const IBMQuantumClient = struct {
     pub fn submitJobWithBackend(self: *IBMQuantumClient, qasm: []const u8, backend: []const u8, shots: u32) ![]const u8 {
         const uri = try std.Uri.parse("https://cloud.ibm.com/quantum/api/v1/jobs");
 
-        var headers = http.Headers{ .allocator = self.allocator };
-        defer headers.deinit();
-
         var auth_buf: [4096]u8 = undefined;
         const auth_value = std.fmt.bufPrint(&auth_buf, "Bearer {s}", .{self.api_token}) catch return error.OutOfMemory;
-        try headers.append("Authorization", auth_value);
-        try headers.append("Content-Type", "application/json");
 
         const escaped_qasm = try escapeForJson(self.allocator, qasm);
         defer self.allocator.free(escaped_qasm);
@@ -130,11 +125,18 @@ pub const IBMQuantumClient = struct {
         , .{ escaped_qasm, escaped_backend, shots });
         defer self.allocator.free(payload);
 
-        var req = try self.http_client.open(.POST, uri, headers, .{});
+        var server_header_buffer: [16 * 1024]u8 = undefined;
+        var req = try self.http_client.open(.POST, uri, .{
+            .server_header_buffer = &server_header_buffer,
+            .extra_headers = &[_]http.Header{
+                .{ .name = "Authorization", .value = auth_value },
+                .{ .name = "Content-Type", .value = "application/json" },
+            },
+        });
         defer req.deinit();
 
         req.transfer_encoding = .chunked;
-        try req.send(.{});
+        try req.send();
         try req.writeAll(payload);
         try req.finish();
         try req.wait();
@@ -149,14 +151,16 @@ pub const IBMQuantumClient = struct {
 
         const uri = try std.Uri.parse(uri_str);
 
-        var headers = http.Headers{ .allocator = self.allocator };
-        defer headers.deinit();
-
         var auth_buf: [4096]u8 = undefined;
         const auth_value = std.fmt.bufPrint(&auth_buf, "Bearer {s}", .{self.api_token}) catch return error.OutOfMemory;
-        try headers.append("Authorization", auth_value);
 
-        var req = try self.http_client.open(.GET, uri, headers, .{});
+        var server_header_buffer: [16 * 1024]u8 = undefined;
+        var req = try self.http_client.open(.GET, uri, .{
+            .server_header_buffer = &server_header_buffer,
+            .extra_headers = &[_]http.Header{
+                .{ .name = "Authorization", .value = auth_value },
+            },
+        });
         defer req.deinit();
 
         try req.send();

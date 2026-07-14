@@ -305,7 +305,7 @@ pub const QuantumTaskAdapter = struct {
 
         for (subgraph.node_ids.items) |node_id| {
             const node = self.graph.getNode(node_id) orelse continue;
-            _ = try self.local_simulator.initializeStateFromComplex(node.quantum_state, node.phase);
+            _ = try self.local_simulator.initializeStateFromComplex(node.qubit.a, node.qubit.b, node.phase);
             self.statistics.total_qubits_used += 1;
         }
 
@@ -378,7 +378,8 @@ pub const QuantumTaskAdapter = struct {
             const node_id = subgraph.node_ids.items[idx];
             const node = self.graph.getNode(node_id) orelse continue;
             const new_state = result.quantum_states.items[idx];
-            node.quantum_state = new_state;
+            node.qubit.a = new_state;
+            node.qubit.normalizeInPlace();
 
             if (idx < result.correlations.items.len) {
                 node.coherence = result.correlations.items[idx];

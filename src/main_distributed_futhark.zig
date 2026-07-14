@@ -396,6 +396,9 @@ pub fn main() !void {
         std.debug.print("[Rank 0] Knowledge graph populated.\n", .{});
     }
 
+    var loss_history = std.ArrayList(EpochMetric).init(allocator);
+    defer loss_history.deinit();
+
     var epoch: usize = 0;
     while (epoch < num_epochs) : (epoch += 1) {
         const start_time = std.time.milliTimestamp();
@@ -410,6 +413,8 @@ pub fn main() !void {
 
         if (coordinator.isRoot()) {
             std.debug.print("[Epoch {d}/{d}] Loss: {d:.6} | Time: {d:.2}s\n", .{ epoch + 1, num_epochs, avg_loss, elapsed });
+
+            try loss_history.append(.{ .epoch = epoch + 1, .loss = avg_loss, .time_s = elapsed });
 
             {
                 var dir_buf: [256]u8 = undefined;
@@ -433,6 +438,17 @@ pub fn main() !void {
                 try trainer.saveCheckpoint(checkpoint_path);
                 std.debug.print("  Checkpoint saved: {s}\n", .{checkpoint_path});
             }
+
+            try writeTrainingMetrics(
+                allocator,
+                loss_history.items,
+                model_dim,
+                num_layers,
+                local_batch_size,
+                learning_rate,
+                samples.len,
+                num_epochs,
+            );
         }
 
         try coordinator.synchronize();
@@ -444,4 +460,39 @@ pub fn main() !void {
         std.debug.print("Final model saved to /checkpoints/\n", .{});
         std.debug.print("============================================================\n", .{});
     }
+}
+
+const EpochMetric = struct { epoch: usize, loss: f64, time_s: f64 };
+
+fn writeTrainingMetrics(
+    allocator: std.mem.Allocator,
+    epoch_metrics: []const EpochMetric,
+    model_dim: usize,
+    num_layers: usize,
+    batch_size: usize,
+    learning_rate: f64,
+    sample_count: usize,
+    planned_epochs: usize,
+) !void {
+    var buf = std.ArrayList(u8).init(allocator);
+    defer buf.deinit();
+    const writer = buf.writer();
+
+    try writer.print(
+        "{{\n  \"model_dim\": {d},\n  \"num_layers\": {d},\n  \"batch_size\": {d},\n  \"learning_rate\": {d},\n  \"sample_count\": {d},\n  \"planned_epochs\": {d},\n  \"loss_curve\": [\n",
+        .{ model_dim, num_layers, batch_size, learning_rate, sample_count, planned_epochs },
+    );
+
+    for (epoch_metrics, 0..) |m, i| {
+        try writer.print(
+            "    {{ \"epoch\": {d}, \"loss\": {d:.6}, \"time_s\": {d:.2} }}{s}\n",
+            .{ m.epoch, m.loss, m.time_s, if (i + 1 < epoch_metrics.len) "," else "" },
+        );
+    }
+
+    try writer.print("  ]\n}}\n", .{});
+
+    const file = try std.fs.createFileAbsolute("/checkpoints/training_metrics.json", .{ .truncate = true });
+    defer file.close();
+    try file.writeAll(buf.items);
 }

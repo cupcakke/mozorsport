@@ -4,7 +4,78 @@ const Tensor = @import("../core/tensor.zig").Tensor;
 const memory = @import("../core/memory.zig");
 const accel = @import("../hw/accel/accel_interface.zig");
 const OFTB = @import("oftb.zig").OFTB;
+const types = @import("../core/types.zig");
 const Thread = std.Thread;
+
+const LAYER_TARGET_SPECTRAL_NORM: f32 = 0.9;
+const LAYER_SPECTRAL_POWER_ITERATIONS: usize = 30;
+
+fn spectralNormPowerIteration(allocator: Allocator, data: []const f32, rows: usize, cols: usize, iterations: usize, seed: u64) !f32 {
+    const u = try allocator.alloc(f32, rows);
+    defer allocator.free(u);
+    const v = try allocator.alloc(f32, cols);
+    defer allocator.free(v);
+
+    var prng = types.PRNG.init(seed);
+    for (v) |*x| x.* = prng.float() * 2.0 - 1.0;
+
+    var iter: usize = 0;
+    while (iter < iterations) : (iter += 1) {
+        for (u) |*x| x.* = 0.0;
+        var i: usize = 0;
+        while (i < rows) : (i += 1) {
+            const row = data[i * cols .. i * cols + cols];
+            var sum: f32 = 0.0;
+            var j: usize = 0;
+            while (j < cols) : (j += 1) sum += row[j] * v[j];
+            u[i] = sum;
+        }
+
+        var u_norm_sq: f32 = 0.0;
+        for (u) |x| u_norm_sq += x * x;
+        const u_norm = @sqrt(u_norm_sq);
+        if (u_norm > 1e-12) {
+            for (u) |*x| x.* /= u_norm;
+        }
+
+        for (v) |*x| x.* = 0.0;
+        i = 0;
+        while (i < rows) : (i += 1) {
+            const row = data[i * cols .. i * cols + cols];
+            const ui = u[i];
+            var j: usize = 0;
+            while (j < cols) : (j += 1) v[j] += row[j] * ui;
+        }
+
+        var v_norm_sq: f32 = 0.0;
+        for (v) |x| v_norm_sq += x * x;
+        const v_norm = @sqrt(v_norm_sq);
+        if (v_norm > 1e-12) {
+            for (v) |*x| x.* /= v_norm;
+        }
+    }
+
+    var sigma: f64 = 0.0;
+    var i: usize = 0;
+    while (i < rows) : (i += 1) {
+        const row = data[i * cols .. i * cols + cols];
+        var partial: f64 = 0.0;
+        var j: usize = 0;
+        while (j < cols) : (j += 1) partial += @as(f64, row[j]) * @as(f64, v[j]);
+        sigma += @as(f64, u[i]) * partial;
+    }
+
+    const sigma_f32: f32 = @floatCast(sigma);
+    return if (sigma_f32 >= 0) sigma_f32 else -sigma_f32;
+}
+
+fn constrainSpectralNorm(allocator: Allocator, weight: *Tensor, rows: usize, cols: usize, target: f32, seed: u64) !void {
+    const norm = try spectralNormPowerIteration(allocator, weight.data, rows, cols, LAYER_SPECTRAL_POWER_ITERATIONS, seed);
+    if (norm > target and norm > 1e-12) {
+        const factor = target / norm;
+        for (weight.data) |*x| x.* *= factor;
+    }
+}
 
 pub const RSFLayerConfig = struct {
     clip_min: f32 = -5.0,
@@ -170,6 +241,9 @@ const LayerCore = struct {
             s_w.data[d * (dim + 1) + dim] = 0.0;
             t_w.data[d * (dim + 1) + dim] = 0.0;
         }
+
+        try constrainSpectralNorm(allocator, &s_w, dim, dim + 1, LAYER_TARGET_SPECTRAL_NORM, checkedAddU64(seed1, 9_000_000) catch seed1);
+        try constrainSpectralNorm(allocator, &t_w, dim, dim + 1, LAYER_TARGET_SPECTRAL_NORM, checkedAddU64(seed2, 9_000_000) catch seed2);
 
         return LayerCore{
             .s_weight = s_w,

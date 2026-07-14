@@ -136,6 +136,7 @@ pub const Node = struct {
     data: []u8,
     qubit: Qubit,
     phase: f64,
+    coherence: f64,
     metadata: StringHashMap([]u8),
     allocator: Allocator,
 
@@ -149,6 +150,7 @@ pub const Node = struct {
             .data = dup_data,
             .qubit = qubit,
             .phase = phase,
+            .coherence = 1.0,
             .metadata = StringHashMap([]u8).init(allocator),
             .allocator = allocator,
         };
@@ -197,6 +199,7 @@ pub const Node = struct {
             .data = dup_data,
             .qubit = self.qubit,
             .phase = self.phase,
+            .coherence = self.coherence,
             .metadata = meta,
             .allocator = allocator,
         };

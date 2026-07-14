@@ -339,13 +339,13 @@ pub const SSI = struct {
         const query_hash = hashTokens(query_tokens);
         try self.traverse(self.root, query_hash, &heap, k, allocator);
         const result_len = @min(k, heap.count());
-        var top_k = try allocator.alloc(types.RankedSegment, result_len);
+        var top_n = try allocator.alloc(types.RankedSegment, result_len);
         var index = result_len;
         while (heap.removeOrNull()) |item| {
             index -= 1;
-            top_k[index] = item;
+            top_n[index] = item;
         }
-        return top_k;
+        return top_n;
     }
 
     fn traverse(self: *const SSI, node: ?*Node, query_hash: u64, heap: anytype, k: usize, allocator: Allocator) !void {

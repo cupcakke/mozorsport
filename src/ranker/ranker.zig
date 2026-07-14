@@ -12,7 +12,7 @@ const Error = types.Error;
 pub const RankerConfig = struct {
     pub const STREAMING_BUFFER_SIZE: usize = 1024;
     pub const STREAMING_WINDOW_SIZE: usize = 512;
-    pub const DEFAULT_TOP_K_RETRIEVAL: usize = 1000;
+    pub const DEFAULT_TOP_N_RETRIEVAL: usize = 1000;
     pub const HASH_SEED_MULTIPLIER_A: u64 = 0x9e3779b97f4a7c15;
     pub const HASH_SEED_MULTIPLIER_B: u64 = 0x517cc1b727220a95;
     pub const LEARNING_RATE: f32 = 0.01;
@@ -399,29 +399,29 @@ pub const Ranker = struct {
         }
 
         const result_count = heap.count();
-        var top_k = try allocator.alloc(types.RankedSegment, result_count);
+        var top_n = try allocator.alloc(types.RankedSegment, result_count);
         errdefer {
             var j: usize = 0;
-            while (j < top_k.len) : (j += 1) {
+            while (j < top_n.len) : (j += 1) {
                 if (j < result_count) {
-                    top_k[j].deinit(allocator);
+                    top_n[j].deinit(allocator);
                 }
             }
-            allocator.free(top_k);
+            allocator.free(top_n);
         }
 
         var idx: usize = result_count;
         while (heap.removeOrNull()) |item| {
             if (idx > 0) {
                 idx -= 1;
-                top_k[idx] = item;
+                top_n[idx] = item;
             } else {
                 var mutable_item = item;
                 mutable_item.deinit(allocator);
             }
         }
 
-        return top_k;
+        return top_n;
     }
 
     pub fn updateWeights(self: *Ranker, gradients: []const f32) void {

@@ -114,29 +114,6 @@ pub fn main() !void {
     std.debug.print("backward/forward time ratio: {d:.2}x\n", .{ratio});
     std.debug.print("--------------------------------------------------------------------------------\n", .{});
 
-    // --- Correctness check ---
-    {
-        var diag = try Tensor.init(allocator, &input_shape);
-        defer diag.deinit();
-        @memcpy(diag.data[0..diag.shape.totalSize()], x.data[0..x.shape.totalSize()]);
-        try model.forwardCPU(&diag);
-        try model.inverse(&diag);
-        var max_abs: f32 = 0.0;
-        var max_rel: f32 = 0.0;
-        var idx: usize = 0;
-        while (idx < x.shape.totalSize()) : (idx += 1) {
-            const av = x.data[idx];
-            const bv = diag.data[idx];
-            const d = @abs(av - bv);
-            if (d > max_abs) max_abs = d;
-            const denom = @max(@abs(av), @abs(bv));
-            if (denom > 0) {
-                const r = d / denom;
-                if (r > max_rel) max_rel = r;
-            }
-        }
-        std.debug.print("[diagnostic] max_abs_diff={e} max_rel_diff={e}\n", .{ max_abs, max_rel });
-    }
     const invertible = try model.verifyInvertible(&x, 1e-4, 1e-4);
     if (invertible) {
         std.debug.print("RESULT: PASS\n", .{});

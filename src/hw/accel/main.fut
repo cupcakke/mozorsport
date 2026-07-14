@@ -91,8 +91,8 @@ entry batch_gradients [batch_size][seq_len][half] (inputs: [batch_size][seq_len]
   let results = map2 (\inp g_out ->
     rsf_backward inp g_out weights_s weights_t clip_min clip_max
   ) inputs grad_outputs
-  let gs_list = map (\(gs, gt) -> gs) results
-  let gt_list = map (\(gs, gt) -> gt) results
+  let gs_list = map (\(gs, _) -> gs) results
+  let gt_list = map (\(_, gt) -> gt) results
   let gs_total = reduce (map2 (map2 (f16.+))) (replicate half (replicate (half+1) (f16.i32 0))) gs_list
   let gt_total = reduce (map2 (map2 (f16.+))) (replicate half (replicate (half+1) (f16.i32 0))) gt_list
   in (copy gs_total, copy gt_total)
@@ -132,9 +132,9 @@ entry rsf_backward_full [n][half] (input: [n][half*2]f16) (grad_output: [n][half
     let grad_in_row = dx1 ++ dx2 :> [half*2]f16
     in (grad_ws_tok, grad_wt_tok, grad_in_row)
   ) input grad_output
-  let gw_s_list = map (\(gw_s, gw_t, g_in) -> gw_s) per_token
-  let gw_t_list = map (\(gw_s, gw_t, g_in) -> gw_t) per_token
-  let g_in_rows = map (\(gw_s, gw_t, g_in) -> g_in) per_token
+  let gw_s_list = map (\(gw_s, _, _) -> gw_s) per_token
+  let gw_t_list = map (\(_, gw_t, _) -> gw_t) per_token
+  let g_in_rows = map (\(_, _, g_in) -> g_in) per_token
   let gs_total = reduce (map2 (map2 (f16.+))) (replicate half (replicate (half+1) (f16.i32 0))) gw_s_list
   let gt_total = reduce (map2 (map2 (f16.+))) (replicate half (replicate (half+1) (f16.i32 0))) gw_t_list
   in (gs_total, gt_total, g_in_rows)
@@ -177,9 +177,9 @@ entry batch_gradients_full [batch_size][seq_len][half]
   let results = map2 (\inp g_out ->
     rsf_backward_full inp g_out weights_s weights_t clip_min clip_max
   ) inputs grad_outputs
-  let gs_list = map (\(gs, gt, gin) -> gs) results
-  let gt_list = map (\(gs, gt, gin) -> gt) results
-  let gin_list = map (\(gs, gt, gin) -> gin) results
+  let gs_list = map (\(gs, _, _) -> gs) results
+  let gt_list = map (\(_, gt, _) -> gt) results
+  let gin_list = map (\(_, _, gin) -> gin) results
   let gs_total = reduce (map2 (map2 (f16.+))) (replicate half (replicate (half+1) (f16.i32 0))) gs_list
   let gt_total = reduce (map2 (map2 (f16.+))) (replicate half (replicate (half+1) (f16.i32 0))) gt_list
   in (copy gs_total, copy gt_total, copy gin_list)
@@ -189,7 +189,7 @@ entry compute_initial_grad_l2 [batch_size][seq_len][d]
   : *[batch_size][seq_len][d]f16 =
   map2 (map2 (map2 (\o t -> (f16.f32 2.0) f16.* (o f16.- t)))) outputs targets
 
-entry xavier_fill_inplace [d] (weights: *[d][d]f16) (seed: i32) : *[d][d]f16 =
+entry xavier_fill_inplace [d] (_weights: *[d][d]f16) (seed: i32) : *[d][d]f16 =
   let scale = f16.sqrt (f16.f32 2.0 f16./ f16.i64 d)
   in map (\i ->
     map (\j ->
