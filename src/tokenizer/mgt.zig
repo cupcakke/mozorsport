@@ -623,47 +623,166 @@ pub const MGT = struct {
         }
     };
 
-    pub fn trainBPE(self: *MGT, corpus: []const []const u8, num_merges: u32) !void {
-        var sequences = try self.allocator.alloc([]u32, corpus.len);
-        errdefer self.allocator.free(sequences);
-        var seq_count: usize = 0;
-        errdefer {
-            for (sequences[0..seq_count]) |seq| {
-                self.allocator.free(seq);
-            }
-        }
-        defer {
-            for (sequences[0..seq_count]) |seq| {
-                self.allocator.free(seq);
-            }
-            self.allocator.free(sequences);
-        }
+    const BpePairDelta = struct {
+        key: TokenPairKey,
+        delta: i64,
+    };
 
-        for (corpus) |text| {
-            const seq = try self.allocator.alloc(u32, text.len);
-            errdefer self.allocator.free(seq);
-            var i: usize = 0;
-            while (i < text.len) : (i += 1) {
-                seq[i] = try self.addByteToken(text[i]);
-            }
-            sequences[seq_count] = seq;
-            seq_count += 1;
-        }
+    const BpeScanWorkerCtx = struct {
+        sequences: [][]u32,
+        pair_freqs: std.AutoHashMap(TokenPairKey, u32),
+        err: ?anyerror,
+    };
 
-        var pair_freqs = std.AutoHashMap(TokenPairKey, u32).init(self.allocator);
-        defer pair_freqs.deinit();
+    const BpeRebuildWorkerCtx = struct {
+        sequences: [][]u32,
+        best_first: u32,
+        best_second: u32,
+        merge_id: u32,
+        deltas: std.ArrayList(BpePairDelta),
+        err: ?anyerror,
+    };
 
-        for (sequences[0..seq_count]) |seq| {
+    fn bpeScanWorkerFn(ctx: *BpeScanWorkerCtx) void {
+        for (ctx.sequences) |seq| {
             if (seq.len < 2) continue;
             var i: usize = 0;
             while (i + 1 < seq.len) : (i += 1) {
                 const key = TokenPairKey{ .first = seq[i], .second = seq[i + 1] };
-                const entry = try pair_freqs.getOrPut(key);
+                const entry = ctx.pair_freqs.getOrPut(key) catch |err| {
+                    ctx.err = err;
+                    return;
+                };
                 if (entry.found_existing) {
                     entry.value_ptr.* += 1;
                 } else {
                     entry.value_ptr.* = 1;
                 }
+            }
+        }
+    }
+
+    fn bpeRebuildWorkerFn(ctx: *BpeRebuildWorkerCtx) void {
+        const seq_alloc = std.heap.page_allocator;
+        for (ctx.sequences) |*seq_ptr| {
+            var seq = seq_ptr.*;
+            if (seq.len < 2) continue;
+            var write: usize = 0;
+            var read: usize = 0;
+            while (read < seq.len) {
+                if (read + 1 < seq.len and seq[read] == ctx.best_first and seq[read + 1] == ctx.best_second) {
+                    if (write > 0) {
+                        const prev = seq[write - 1];
+                        ctx.deltas.append(.{ .key = .{ .first = prev, .second = ctx.best_first }, .delta = -1 }) catch |err| {
+                            ctx.err = err;
+                            return;
+                        };
+                        ctx.deltas.append(.{ .key = .{ .first = prev, .second = ctx.merge_id }, .delta = 1 }) catch |err| {
+                            ctx.err = err;
+                            return;
+                        };
+                    }
+                    if (read + 2 < seq.len) {
+                        const next = seq[read + 2];
+                        ctx.deltas.append(.{ .key = .{ .first = ctx.best_second, .second = next }, .delta = -1 }) catch |err| {
+                            ctx.err = err;
+                            return;
+                        };
+                        ctx.deltas.append(.{ .key = .{ .first = ctx.merge_id, .second = next }, .delta = 1 }) catch |err| {
+                            ctx.err = err;
+                            return;
+                        };
+                    }
+                    seq[write] = ctx.merge_id;
+                    write += 1;
+                    read += 2;
+                } else {
+                    if (write != read) seq[write] = seq[read];
+                    write += 1;
+                    read += 1;
+                }
+            }
+            if (write < seq.len) {
+                if (seq_alloc.realloc(seq, write)) |shrunk| {
+                    seq_ptr.* = shrunk;
+                } else |_| {
+                    seq_ptr.* = seq[0..write];
+                }
+            }
+        }
+    }
+
+    pub fn trainBPE(self: *MGT, corpus: []const []const u8, num_merges: u32) !void {
+        const seq_alloc = std.heap.page_allocator;
+
+        var sequences = try self.allocator.alloc([]u32, corpus.len);
+        errdefer self.allocator.free(sequences);
+        var seq_count: usize = 0;
+        errdefer {
+            for (sequences[0..seq_count]) |seq| seq_alloc.free(seq);
+        }
+        defer {
+            for (sequences[0..seq_count]) |seq| seq_alloc.free(seq);
+            self.allocator.free(sequences);
+        }
+
+        for (corpus) |text| {
+            if (text.len == 0) continue;
+            const seq = try seq_alloc.alloc(u32, text.len);
+            errdefer seq_alloc.free(seq);
+            for (text, 0..) |byte, i| {
+                seq[i] = try self.addByteToken(byte);
+            }
+            sequences[seq_count] = seq;
+            seq_count += 1;
+        }
+
+        const n_cpus: usize = std.Thread.getCpuCount() catch 4;
+        const n_workers: usize = @min(n_cpus, @max(1, seq_count));
+
+        var pair_freqs = std.AutoHashMap(TokenPairKey, u32).init(self.allocator);
+        defer pair_freqs.deinit();
+        try pair_freqs.ensureTotalCapacity(65536);
+
+        if (seq_count > 0) {
+            const scan_ctxs = try self.allocator.alloc(BpeScanWorkerCtx, n_workers);
+            defer self.allocator.free(scan_ctxs);
+            const scan_threads = try self.allocator.alloc(std.Thread, n_workers);
+            defer self.allocator.free(scan_threads);
+
+            const base_chunk = seq_count / n_workers;
+            const rem_chunk = seq_count % n_workers;
+            var offset: usize = 0;
+            for (scan_ctxs, 0..) |*ctx, wi| {
+                const chunk = base_chunk + (if (wi < rem_chunk) @as(usize, 1) else @as(usize, 0));
+                ctx.* = .{
+                    .sequences = sequences[offset .. offset + chunk],
+                    .pair_freqs = std.AutoHashMap(TokenPairKey, u32).init(seq_alloc),
+                    .err = null,
+                };
+                offset += chunk;
+            }
+
+            for (scan_ctxs, 0..) |*ctx, wi| {
+                scan_threads[wi] = try std.Thread.spawn(.{}, bpeScanWorkerFn, .{ctx});
+            }
+            for (scan_threads[0..n_workers]) |thread| thread.join();
+
+            for (scan_ctxs) |*ctx| {
+                defer ctx.pair_freqs.deinit();
+                if (ctx.err != null) continue;
+                var it = ctx.pair_freqs.iterator();
+                while (it.next()) |entry| {
+                    const gop = try pair_freqs.getOrPut(entry.key_ptr.*);
+                    if (gop.found_existing) {
+                        gop.value_ptr.* += entry.value_ptr.*;
+                    } else {
+                        gop.value_ptr.* = entry.value_ptr.*;
+                    }
+                }
+            }
+            for (scan_ctxs) |ctx| {
+                if (ctx.err) |err| return err;
             }
         }
 
@@ -693,54 +812,60 @@ pub const MGT = struct {
 
             _ = pair_freqs.remove(best_key);
 
-            for (sequences[0..seq_count]) |*seq_ptr| {
-                const old_seq = seq_ptr.*;
-                var rebuilt = std.ArrayList(u32).init(self.allocator);
-                defer rebuilt.deinit();
-                var i: usize = 0;
-                while (i < old_seq.len) {
-                    if (i + 1 < old_seq.len and old_seq[i] == best_key.first and old_seq[i + 1] == best_key.second) {
-                        if (rebuilt.items.len > 0) {
-                            const prev_token = rebuilt.items[rebuilt.items.len - 1];
-                            const old_left_pair = TokenPairKey{ .first = prev_token, .second = best_key.first };
-                            if (pair_freqs.getPtr(old_left_pair)) |ptr| {
-                                if (ptr.* > 0) ptr.* -= 1;
-                            }
-                            const new_left_pair = TokenPairKey{ .first = prev_token, .second = merge_token_id };
-                            const lp_entry = try pair_freqs.getOrPut(new_left_pair);
-                            if (lp_entry.found_existing) {
-                                lp_entry.value_ptr.* += 1;
-                            } else {
-                                lp_entry.value_ptr.* = 1;
-                            }
-                        }
+            const rb_ctxs = try self.allocator.alloc(BpeRebuildWorkerCtx, n_workers);
+            defer self.allocator.free(rb_ctxs);
+            const rb_threads = try self.allocator.alloc(std.Thread, n_workers);
+            defer self.allocator.free(rb_threads);
 
-                        if (i + 2 < old_seq.len) {
-                            const next_token = old_seq[i + 2];
-                            const old_right_pair = TokenPairKey{ .first = best_key.second, .second = next_token };
-                            if (pair_freqs.getPtr(old_right_pair)) |ptr| {
-                                if (ptr.* > 0) ptr.* -= 1;
-                            }
-                            const new_right_pair = TokenPairKey{ .first = merge_token_id, .second = next_token };
-                            const rp_entry = try pair_freqs.getOrPut(new_right_pair);
-                            if (rp_entry.found_existing) {
-                                rp_entry.value_ptr.* += 1;
-                            } else {
-                                rp_entry.value_ptr.* = 1;
-                            }
-                        }
+            const base_rb = seq_count / n_workers;
+            const rem_rb = seq_count % n_workers;
+            var rb_off: usize = 0;
+            for (rb_ctxs, 0..) |*ctx, wi| {
+                const chunk = base_rb + (if (wi < rem_rb) @as(usize, 1) else @as(usize, 0));
+                ctx.* = .{
+                    .sequences = sequences[rb_off .. rb_off + chunk],
+                    .best_first = best_key.first,
+                    .best_second = best_key.second,
+                    .merge_id = merge_token_id,
+                    .deltas = std.ArrayList(BpePairDelta).init(seq_alloc),
+                    .err = null,
+                };
+                rb_off += chunk;
+            }
 
-                        try rebuilt.append(merge_token_id);
-                        i += 2;
+            for (rb_ctxs, 0..) |*ctx, wi| {
+                rb_threads[wi] = try std.Thread.spawn(.{}, bpeRebuildWorkerFn, .{ctx});
+            }
+            for (rb_threads[0..n_workers]) |thread| thread.join();
+
+            var first_rb_err: ?anyerror = null;
+            for (rb_ctxs) |*ctx| {
+                defer ctx.deltas.deinit();
+                if (ctx.err) |err| {
+                    if (first_rb_err == null) first_rb_err = err;
+                    continue;
+                }
+                for (ctx.deltas.items) |delta| {
+                    if (delta.delta >= 0) {
+                        const gop = try pair_freqs.getOrPut(delta.key);
+                        if (gop.found_existing) {
+                            gop.value_ptr.* += @as(u32, @intCast(delta.delta));
+                        } else {
+                            gop.value_ptr.* = @as(u32, @intCast(delta.delta));
+                        }
                     } else {
-                        try rebuilt.append(old_seq[i]);
-                        i += 1;
+                        if (pair_freqs.getPtr(delta.key)) |ptr| {
+                            const dec = @as(u32, @intCast(-delta.delta));
+                            if (ptr.* > dec) {
+                                ptr.* -= dec;
+                            } else {
+                                ptr.* = 0;
+                            }
+                        }
                     }
                 }
-                const new_seq = try rebuilt.toOwnedSlice();
-                self.allocator.free(old_seq);
-                seq_ptr.* = new_seq;
             }
+            if (first_rb_err) |err| return err;
 
             merge_count += 1;
         }

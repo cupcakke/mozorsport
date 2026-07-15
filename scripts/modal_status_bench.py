@@ -113,21 +113,49 @@ def _run(
 ) -> Tuple[int, str, float]:
     _log(f">>> {' '.join(cmd)}  (cwd={cwd})")
     t0 = time.time()
-    proc = subprocess.run(
+    deadline = t0 + timeout
+
+    stdin_mode = subprocess.PIPE if input_bytes is not None else None
+    proc = subprocess.Popen(
         cmd,
         cwd=cwd,
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        input=input_bytes,
-        timeout=timeout,
+        stdin=stdin_mode,
+        bufsize=0,
     )
+
+    if input_bytes is not None:
+        proc.stdin.write(input_bytes)
+        proc.stdin.close()
+
+    output_lines: List[str] = []
+    timed_out = False
+
+    for raw_line in iter(proc.stdout.readline, b""):
+        line = raw_line.decode("utf-8", errors="replace")
+        print(line, end="", flush=True)
+        output_lines.append(line)
+        if time.time() > deadline:
+            timed_out = True
+            proc.kill()
+            proc.wait()
+            break
+
+    if not timed_out:
+        proc.wait()
+
     dt = time.time() - t0
-    out = proc.stdout.decode("utf-8", errors="replace")
-    print(out, flush=True)
+    out = "".join(output_lines)
     _log(f"<<< exit={proc.returncode}  dt={dt:.2f}s")
+
+    if timed_out:
+        raise subprocess.TimeoutExpired(cmd, timeout, output=out.encode())
+
     if check and proc.returncode != 0:
         raise SystemExit(f"command failed rc={proc.returncode}: {' '.join(cmd)}")
+
     return proc.returncode, out, dt
 
 

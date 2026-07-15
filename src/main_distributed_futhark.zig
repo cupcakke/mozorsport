@@ -386,9 +386,50 @@ pub fn main() !void {
         std.debug.print("============================================================\n\n", .{});
     }
 
-    for (samples) |sample_text| {
-        trainer.buildKnowledgeGraph(sample_text) catch |err| {
-            std.debug.print("[Rank {d}] CREV processTextStream warning: {} (continuing)\n", .{ rank, err });
+    {
+        const n_kg_cpus: usize = std.Thread.getCpuCount() catch 4;
+        const n_kg_workers: usize = @min(n_kg_cpus, @max(1, samples.len));
+        const kg_ctxs = try allocator.alloc(KGWorkerCtx, n_kg_workers);
+        defer allocator.free(kg_ctxs);
+        const kg_threads = try allocator.alloc(std.Thread, n_kg_workers);
+        defer allocator.free(kg_threads);
+
+        const kg_base = samples.len / n_kg_workers;
+        const kg_rem = samples.len % n_kg_workers;
+        var kg_off: usize = 0;
+        for (kg_ctxs, 0..) |*ctx, wi| {
+            const chunk = kg_base + (if (wi < kg_rem) @as(usize, 1) else @as(usize, 0));
+            ctx.* = .{
+                .samples = samples[kg_off .. kg_off + chunk],
+                .rank = rank,
+                .arena = std.heap.ArenaAllocator.init(std.heap.page_allocator),
+                .local_nsir = undefined,
+                .err = null,
+            };
+            kg_off += chunk;
+        }
+
+        for (kg_ctxs, 0..) |*ctx, wi| {
+            kg_threads[wi] = try std.Thread.spawn(.{}, kgWorkerFn, .{ctx});
+        }
+        for (kg_threads[0..n_kg_workers]) |thread| thread.join();
+
+        for (kg_ctxs) |*ctx| {
+            defer ctx.arena.deinit();
+            if (ctx.err != null) continue;
+            var node_it = ctx.local_nsir.nodes.iterator();
+            while (node_it.next()) |entry| {
+                const n = entry.value_ptr.*;
+                const new_node = core_relational.nsir_core.Node.init(allocator, n.id, n.data, n.qubit, n.phase) catch continue;
+                trainer.nsir_graph.addNode(new_node) catch {};
+            }
+        }
+
+        trainer.r_gpu.distributeGraph(trainer.nsir_graph) catch |err| {
+            std.debug.print("[Rank {d}] WARN: r_gpu.distributeGraph (KG) failed: {} (continuing)\n", .{ rank, err });
+        };
+        trainer.signal_engine.propagateStep() catch |err| {
+            std.debug.print("[Rank {d}] WARN: signal_engine.propagateStep (KG) failed: {} (continuing)\n", .{ rank, err });
         };
     }
 
@@ -463,6 +504,33 @@ pub fn main() !void {
 }
 
 const EpochMetric = struct { epoch: usize, loss: f64, time_s: f64 };
+
+const KGWorkerCtx = struct {
+    samples: []const []const u8,
+    rank: usize,
+    arena: std.heap.ArenaAllocator,
+    local_nsir: core_relational.SelfSimilarRelationalGraph,
+    err: ?anyerror,
+};
+
+fn kgWorkerFn(ctx: *KGWorkerCtx) void {
+    const a = ctx.arena.allocator();
+    var chaos = core_relational.ChaosCoreKernel.init(a);
+    var local_crev = core_relational.CREVPipeline.init(a, &chaos) catch |err| {
+        ctx.err = err;
+        return;
+    };
+    var local_nsir = core_relational.SelfSimilarRelationalGraph.init(a) catch |err| {
+        ctx.err = err;
+        return;
+    };
+    for (ctx.samples) |text| {
+        if (text.len == 0) continue;
+        _ = local_crev.processTextStream(text) catch {};
+        _ = local_nsir.encodeInformation(std.mem.sliceAsBytes(text)) catch {};
+    }
+    ctx.local_nsir = local_nsir;
+}
 
 fn writeTrainingMetrics(
     allocator: std.mem.Allocator,
