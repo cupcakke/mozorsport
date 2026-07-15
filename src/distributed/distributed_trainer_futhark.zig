@@ -662,6 +662,38 @@ pub const DistributedTrainerFuthark = struct {
         );
     }
 
+    /// Reset all unbounded relational state accumulated during training.
+    /// Call once per epoch to prevent unbounded memory growth from crashing the
+    /// process with SIGSEGV.  Model weights are not touched.
+    fn pruneRelationalState(self: *DistributedTrainerFuthark) !void {
+        // Drop and re-create the NSIR graph (encodeInformation grows it every step).
+        self.nsir_graph.deinit();
+        self.nsir_graph.* = try SelfSimilarRelationalGraph.init(self.allocator);
+
+        // Drop and re-create the temporal graph (O(n²) growth: adds every nsir
+        // node on every step).
+        self.temporal_graph.deinit();
+        self.temporal_graph = TemporalGraph.init(self.allocator);
+        self.temporal_logical_time = 0;
+
+        // Release FNDS trees/indices — they are lazily re-created on the next step.
+        self.releaseFndsResources();
+
+        // Re-bind the signal engine to the fresh graph; this also clears the
+        // activation_traces hashmap that otherwise grows without bound.
+        self.rebindSignalEngine();
+
+        // Reset surprise memory so its internal record list does not grow forever.
+        self.surprise_memory.deinit();
+        self.surprise_memory = SurpriseMemoryManager.init(
+            self.allocator,
+            &self.crev_kernel.storage,
+            &self.crev_kernel.flow_analyzer,
+        );
+
+        self.training_variable_created = false;
+    }
+
     pub fn reinitEmbedding(self: *DistributedTrainerFuthark) !void {
         var new_embedding = try LearnedEmbedding.init(
             self.allocator,
@@ -1182,10 +1214,15 @@ pub const DistributedTrainerFuthark = struct {
 
         if (global_weight <= 0.0) {
             std.debug.print("[WARNING] No samples processed across all ranks\n", .{});
+            try self.pruneRelationalState();
             return 0.0;
         }
         const result: f32 = @floatCast(global_loss_sum / global_weight);
         if (!std.math.isFinite(result)) return TrainerError.InvalidLoss;
+        // Prune unbounded relational state accumulated during this epoch so the
+        // next epoch starts with fresh, small structures (prevents SIGSEGV from
+        // host-RAM exhaustion after many steps).
+        try self.pruneRelationalState();
         return result;
     }
 
