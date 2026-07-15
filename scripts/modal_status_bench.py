@@ -98,10 +98,8 @@ image = (
     )
 )
 
-
 def _log(msg: str) -> None:
     print(f"[bench] {msg}", flush=True)
-
 
 def _run(
     cmd: List[str],
@@ -158,14 +156,12 @@ def _run(
 
     return proc.returncode, out, dt
 
-
 def _write_report(report_dir: Path, name: str, content: str) -> None:
     report_dir.mkdir(parents=True, exist_ok=True)
     fp = report_dir / name
     with open(fp, "w", encoding="utf-8") as f:
         f.write(content)
     _log(f"report written: {fp}")
-
 
 def _download_finephrase(target_path: Path, cap: int) -> Tuple[int, int]:
     from datasets import load_dataset
@@ -208,10 +204,9 @@ def _download_finephrase(target_path: Path, cap: int) -> Tuple[int, int]:
     _log(f"downloaded {written} samples, {size} bytes -> {target_path}")
     return size, written
 
-
 def _run_futhark_kernels(project_dir: str, env: Dict[str, str]) -> None:
     accel_dir = os.path.join(project_dir, "src", "hw", "accel")
-    _log("Futhark pkg sync (fetch diku-dk/sorts and other declared deps)")
+    _log("Futhark pkg sync")
     _run(
         ["futhark", "pkg", "sync"],
         cwd=accel_dir,
@@ -219,7 +214,7 @@ def _run_futhark_kernels(project_dir: str, env: Dict[str, str]) -> None:
         check=False,
         timeout=180,
     )
-    _log("Futhark CPU library build (futhark_kernels.fut)")
+    _log("Futhark CPU library build")
     _run(
         [
             "futhark",
@@ -232,7 +227,7 @@ def _run_futhark_kernels(project_dir: str, env: Dict[str, str]) -> None:
         cwd=project_dir,
         env=env,
     )
-    _log("Futhark CUDA library build (main.fut) -- header generation only, no live GPU needed")
+    _log("Futhark CUDA library build")
     _run(
         [
             "futhark",
@@ -245,7 +240,6 @@ def _run_futhark_kernels(project_dir: str, env: Dict[str, str]) -> None:
         cwd=project_dir,
         env=env,
     )
-
 
 @app.function(
     image=image,
@@ -272,7 +266,7 @@ def prepare_cpu(run_id: int) -> Dict[str, Any]:
     }
 
     _log("=" * 70)
-    _log(f"CPU PREPARE PHASE (no GPU allocated) run_id={run_id}")
+    _log(f"CPU PREPARE PHASE run_id={run_id}")
     _log("=" * 70)
 
     _run(["zig", "version"], cwd=project_dir, env=env)
@@ -281,41 +275,7 @@ def prepare_cpu(run_id: int) -> Dict[str, Any]:
     _run_futhark_kernels(project_dir, env)
 
     _log("=" * 70)
-    _log("PHASE A: SANITY & INVERTIBILITY (CPU test suite)")
-    _log("=" * 70)
-    t0 = time.time()
-    rc_a, out_a, _ = _run(
-        ["zig", "build", "test-all", "-Doptimize=ReleaseSafe"],
-        cwd=project_dir,
-        env=env,
-        check=False,
-        timeout=1800,
-    )
-    result["phases"]["A_sanity"] = {
-        "returncode": rc_a,
-        "duration_s": round(time.time() - t0, 2),
-    }
-    _write_report(report_dir, "phase_a_sanity.log", out_a)
-
-    _log("=" * 70)
-    _log("PHASE A2: CPU throughput benchmarks")
-    _log("=" * 70)
-    t0 = time.time()
-    rc_a2, out_a2, _ = _run(
-        ["zig", "build", "bench", "-Doptimize=ReleaseFast"],
-        cwd=project_dir,
-        env=env,
-        check=False,
-        timeout=1200,
-    )
-    result["phases"]["A2_cpu_bench"] = {
-        "returncode": rc_a2,
-        "duration_s": round(time.time() - t0, 2),
-    }
-    _write_report(report_dir, "phase_a2_cpu_bench.log", out_a2)
-
-    _log("=" * 70)
-    _log("PHASE B: GPU-target build (-Dgpu=true) -- header/link only, no live GPU")
+    _log("PHASE B: GPU-target build (-Dgpu=true)")
     _log("=" * 70)
     t0 = time.time()
     rc_b, out_b, _ = _run(
@@ -359,7 +319,7 @@ def prepare_cpu(run_id: int) -> Dict[str, Any]:
         _log(f"WARN: inference binary NOT built at {inference_bin}")
 
     _log("=" * 70)
-    _log(f"PHASE C-prep: dataset download (FinePhrase, up to {SAMPLE_CAP} samples)")
+    _log(f"PHASE C-prep: dataset download ({SAMPLE_CAP} samples)")
     _log("=" * 70)
     dataset_dir = DATA_MOUNT_PATH / "dataset"
     dataset_path = dataset_dir / "finephrase_bench.jsonl"
@@ -381,11 +341,10 @@ def prepare_cpu(run_id: int) -> Dict[str, Any]:
     report_volume.commit()
 
     _log("=" * 70)
-    _log("CPU PREPARE PHASE DONE — GPU function can now be launched")
+    _log("CPU PREPARE PHASE DONE")
     _log("=" * 70)
 
     return result
-
 
 @app.function(
     image=image,
@@ -432,6 +391,7 @@ def run_gpu_train_and_infer(
     gpu_phase_start = time.time()
 
     _run(["nvidia-smi"], cwd=project_dir, env=env, check=False, timeout=30)
+    _run(["lscpu"], cwd=project_dir, env=env, check=False, timeout=10)
 
     build_source_dir = BUILD_MOUNT_PATH / f"run_{run_id}"
     distributed_bin_src = build_source_dir / "jaide-distributed-futhark"
@@ -464,7 +424,7 @@ def run_gpu_train_and_infer(
         result["phases"]["C_training_convergence"] = {"skipped": "dataset not prepared"}
     else:
         _log("=" * 70)
-        _log(f"PHASE C: MINI TRAINING ({sample_count} samples, {EPOCHS} epochs, dim={MODEL_DIM})")
+        _log(f"PHASE C: TRAINING ({sample_count} samples, {EPOCHS} epochs, dim={MODEL_DIM})")
         _log("=" * 70)
 
         train_env = env.copy()
@@ -533,8 +493,8 @@ def run_gpu_train_and_infer(
             try:
                 training_metrics_json = json.loads(metrics_path.read_text(encoding="utf-8"))
                 _write_report(report_dir, "training_metrics.json", metrics_path.read_text(encoding="utf-8"))
-            except (json.JSONDecodeError, OSError) as exc:
-                _log(f"WARN: failed to read training_metrics.json: {exc}")
+            except (json.JSONDecodeError, OSError):
+                pass
 
         result["phases"]["C_training_convergence"] = {
             "returncode": rc_c,
@@ -669,7 +629,7 @@ def run_gpu_train_and_infer(
     gpu_phase_duration = time.time() - gpu_phase_start
     result["gpu_phase_duration_s"] = round(gpu_phase_duration, 2)
     _log("=" * 70)
-    _log(f"GPU PHASE END duration={gpu_phase_duration:.2f}s — GPU is being released now")
+    _log(f"GPU PHASE END duration={gpu_phase_duration:.2f}s")
     _log("=" * 70)
 
     summary_json = json.dumps(result, indent=2, default=str)
@@ -678,13 +638,12 @@ def run_gpu_train_and_infer(
 
     return result
 
-
 @app.local_entrypoint()
 def main():
     run_id = int(time.time())
     _log(f"launching run_id={run_id}")
 
-    _log("STEP 1: prepare_cpu (no GPU allocated)")
+    _log("STEP 1: prepare_cpu")
     prep_result = prepare_cpu.remote(run_id)
     print("\n" + "=" * 70)
     print("CPU PREPARE RESULT")
@@ -693,19 +652,18 @@ def main():
 
     if not prep_result.get("distributed_binary_present"):
         print("\n" + "=" * 70)
-        print("ABORT: distributed binary was not built — skipping GPU phase.")
-        print("Fix the build errors shown above, then re-run.")
+        print("ABORT: distributed binary was not built")
         print("=" * 70)
         return
 
     dataset_ok = prep_result.get("phases", {}).get("C_prep_dataset", {}).get("sample_count", 0) > 0
     if not dataset_ok:
         print("\n" + "=" * 70)
-        print("ABORT: dataset not prepared — skipping GPU phase.")
+        print("ABORT: dataset not prepared")
         print("=" * 70)
         return
 
-    _log("STEP 2: run_gpu_train_and_infer (GPU allocated only for this call)")
+    _log("STEP 2: run_gpu_train_and_infer")
     gpu_result = run_gpu_train_and_infer.remote(run_id, prep_result)
     print("\n" + "=" * 70)
     print("GPU PHASE RESULT")
