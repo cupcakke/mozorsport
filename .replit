@@ -27,12 +27,12 @@ name = "Setup Modal Token"
 mode = "sequential"
 author = "agent"
 
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "uv run modal token set --token-id \"$MODAL_TOKEN_ID\" --token-secret \"$MODAL_TOKEN_SECRET\" --profile=kutyamajom && uv run modal profile activate kutyamajom"
-
 [workflows.workflow.metadata]
 outputType = "console"
+
+[[workflows.workflow.tasks]]
+task = "shell.exec"
+args = "bash scripts/setup_modal_token.sh"
 
 [[workflows.workflow]]
 name = "Modal App List"
