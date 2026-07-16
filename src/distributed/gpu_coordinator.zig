@@ -82,7 +82,7 @@ pub const GPUCoordinator = struct {
     cuda_stream: ?*anyopaque,
     barrier_buffer: ?*anyopaque,
 
-    pub fn init(allocator: Allocator, world_size: usize, rank: usize, nccl_id: nccl.ncclUniqueId) !GPUCoordinator {
+    pub fn init(allocator: Allocator, world_size: usize, rank: usize, local_rank: usize, nccl_id: nccl.ncclUniqueId) !GPUCoordinator {
         _ = allocator;
 
         if (world_size == 0) {
@@ -105,7 +105,10 @@ pub const GPUCoordinator = struct {
         }
 
         const local_device_count: usize = @intCast(device_count);
-        const device_id_usize: usize = rank % local_device_count;
+        if (local_rank >= local_device_count) {
+            return error.LocalRankExceedsDeviceCount;
+        }
+        const device_id_usize: usize = local_rank;
         if (device_id_usize > @as(usize, @intCast(std.math.maxInt(i32)))) {
             return error.DeviceIdOutOfRange;
         }
@@ -385,18 +388,16 @@ pub const GPUCoordinator = struct {
 
         try checkCuda(nccl.cudaStreamSynchronize(stream), "cudaStreamSynchronize", error.CudaSynchronizeFailed);
 
-        if (nccl.cudaGetLastError() != .cudaSuccess) {
-            try checkCuda(nccl.cudaGetLastError(), "cudaGetLastError", error.CudaSynchronizeFailed);
-        }
+        const pending_err = nccl.cudaGetLastError();
+        try checkCuda(pending_err, "cudaGetLastError", error.CudaSynchronizeFailed);
     }
 
     pub fn deviceSynchronize(self: *GPUCoordinator) !void {
         try self.setDevice();
         try checkCuda(nccl.cudaDeviceSynchronize(), "cudaDeviceSynchronize", error.CudaSynchronizeFailed);
 
-        if (nccl.cudaGetLastError() != .cudaSuccess) {
-            try checkCuda(nccl.cudaGetLastError(), "cudaGetLastError(device)", error.CudaSynchronizeFailed);
-        }
+        const pending_err = nccl.cudaGetLastError();
+        try checkCuda(pending_err, "cudaGetLastError(device)", error.CudaSynchronizeFailed);
     }
 
     pub fn barrier(self: *GPUCoordinator) !void {

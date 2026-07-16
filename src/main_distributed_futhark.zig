@@ -190,6 +190,17 @@ pub fn main() !void {
     defer allocator.free(rank_str);
     const rank = try std.fmt.parseInt(usize, rank_str, 10);
 
+    var local_rank_str_owned: ?[]u8 = null;
+    const local_rank: usize = blk: {
+        local_rank_str_owned = std.process.getEnvVarOwned(allocator, "LOCAL_RANK") catch null;
+        if (local_rank_str_owned) |owned| {
+            break :blk try std.fmt.parseInt(usize, owned, 10);
+        }
+        std.debug.print("[Rank {d}] WARN: LOCAL_RANK not set, falling back to RANK ({d}) for device selection\n", .{ rank, rank });
+        break :blk rank;
+    };
+    defer if (local_rank_str_owned) |owned| allocator.free(owned);
+
     const master_addr = try std.process.getEnvVarOwned(allocator, "MASTER_ADDR");
     defer allocator.free(master_addr);
 
@@ -267,7 +278,7 @@ pub fn main() !void {
         std.debug.print("[Rank {d}] Loaded NCCL ID from rank 0\n", .{rank});
     }
 
-    var coordinator = try GPUCoordinator.init(allocator, world_size_val, rank, nccl_id);
+    var coordinator = try GPUCoordinator.init(allocator, world_size_val, rank, local_rank, nccl_id);
     defer coordinator.deinit();
 
     std.debug.print("[Rank {d}] GPU coordinator initialized\n", .{rank});
@@ -372,8 +383,6 @@ pub fn main() !void {
     std.debug.print("[Rank {d}] learning_rate={d}\n", .{ rank, learning_rate });
 
     std.debug.print("[Rank {d}] Futhark-accelerated trainer initialized (f16, model_dim={d}, layers={d})\n", .{ rank, model_dim, num_layers });
-
-    try trainer.reinitEmbedding();
 
     if (coordinator.isRoot()) {
         std.debug.print("\n============================================================\n", .{});

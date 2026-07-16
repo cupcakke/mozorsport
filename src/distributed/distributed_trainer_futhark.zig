@@ -421,11 +421,7 @@ pub const DistributedTrainerFuthark = struct {
         if (!std.math.isFinite(config.gradient_clip_norm) or config.gradient_clip_norm <= 0.0) return TrainerError.InvalidGradient;
         try validateHyperparameters(config.learning_rate, config.momentum);
 
-        var actual_model_dim = model_dim;
-        if (actual_model_dim < components.tokenizer.next_token_id) {
-            actual_model_dim = components.tokenizer.next_token_id;
-            if (actual_model_dim % 2 != 0) actual_model_dim = try std.math.add(usize, actual_model_dim, 1);
-        }
+        const actual_model_dim = model_dim;
 
         const accelerator_ptr = try allocator.create(RSFAccelerator);
         var accelerator_ptr_committed = false;

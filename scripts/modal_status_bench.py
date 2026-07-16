@@ -283,7 +283,7 @@ def prepare_cpu(run_id: int) -> Dict[str, Any]:
             "zig",
             "build",
             "-Dgpu=true",
-            "-Doptimize=ReleaseFast",
+            "-Doptimize=ReleaseSafe",
         ],
         cwd=project_dir,
         env=env,
