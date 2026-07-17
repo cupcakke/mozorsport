@@ -392,6 +392,19 @@ pub const FutharkArray3DF16 = struct {
         return Self{ .arr = arr, .dim0 = d0, .dim1 = d1, .dim2 = d2 };
     }
 
+    pub fn valuesFlat(self: *const Self, ctx: *FutharkContext, allocator: std.mem.Allocator) AccelError![]f16 {
+        if (ctx.ctx == null) return AccelError.NullPointer;
+        if (self.arr == null) return AccelError.NullPointer;
+        if (self.dim0 == 0 or self.dim1 == 0 or self.dim2 == 0) return AccelError.InvalidDimensions;
+        const rows = std.math.mul(usize, self.dim0, self.dim1) catch return AccelError.AllocationFailed;
+        const count = std.math.mul(usize, rows, self.dim2) catch return AccelError.AllocationFailed;
+        const out = allocator.alloc(f16, count) catch return AccelError.AllocationFailed;
+        errdefer allocator.free(out);
+        if (futhark.futhark_values_f16_3d(ctx.ctx, self.arr, @ptrCast(out.ptr)) != 0) return AccelError.FutharkValuesFailed;
+        if (futhark.futhark_context_sync(ctx.ctx) != 0) return AccelError.FutharkSyncFailed;
+        return out;
+    }
+
     pub fn free(self: *Self, ctx: *FutharkContext) void {
         if (self.arr) |arr| {
             _ = futhark.futhark_free_f16_3d(ctx.ctx, arr);
@@ -946,6 +959,58 @@ pub const RSFAccelerator = struct {
         }
 
         return loss_f16;
+    }
+
+    pub fn forwardBatch(self: *Self, inputs: *FutharkArray3DF16) AccelError!FutharkArray3DF16 {
+        if (!self.initialized) return AccelError.NullPointer;
+        if (self.ctx.ctx == null) return AccelError.NullPointer;
+        if (inputs.arr == null) return AccelError.NullPointer;
+        if (self.layers.len == 0) return AccelError.NullPointer;
+        const clip_min_bits: u16 = @bitCast(self.clip_min);
+        const clip_max_bits: u16 = @bitCast(self.clip_max);
+        var current_act: ?*futhark.struct_futhark_f16_3d = inputs.arr;
+        var current_owned = false;
+        errdefer if (current_owned) {
+            if (current_act) |act| _ = futhark.futhark_free_f16_3d(self.ctx.ctx, act);
+        };
+        var li: usize = 0;
+        while (li < self.layers.len) : (li += 1) {
+            const layer = &self.layers[li];
+            if (layer.weights_s.arr == null or layer.weights_t.arr == null) return AccelError.NullPointer;
+            var rsf_out: ?*futhark.struct_futhark_f16_3d = null;
+            const forward_rc = futhark.futhark_entry_batch_forward(
+                self.ctx.ctx,
+                &rsf_out,
+                current_act,
+                layer.weights_s.arr,
+                layer.weights_t.arr,
+                clip_min_bits,
+                clip_max_bits,
+            );
+            if (forward_rc != 0 or rsf_out == null) {
+                if (rsf_out) |out| _ = futhark.futhark_free_f16_3d(self.ctx.ctx, out);
+                return AccelError.FutharkForwardFailed;
+            }
+            if (current_owned) {
+                if (current_act) |act| _ = futhark.futhark_free_f16_3d(self.ctx.ctx, act);
+            }
+            current_act = rsf_out;
+            current_owned = true;
+            var oftb_out: ?*futhark.struct_futhark_f16_3d = null;
+            const oftb_rc = futhark.futhark_entry_batch_oftb_forward(self.ctx.ctx, &oftb_out, current_act);
+            if (current_act) |act| _ = futhark.futhark_free_f16_3d(self.ctx.ctx, act);
+            current_act = null;
+            current_owned = false;
+            if (oftb_rc != 0 or oftb_out == null) {
+                if (oftb_out) |out| _ = futhark.futhark_free_f16_3d(self.ctx.ctx, out);
+                return AccelError.FutharkForwardFailed;
+            }
+            current_act = oftb_out;
+            current_owned = true;
+        }
+        const result_arr = current_act orelse return AccelError.NullPointer;
+        current_owned = false;
+        return FutharkArray3DF16{ .arr = result_arr, .dim0 = inputs.dim0, .dim1 = inputs.dim1, .dim2 = inputs.dim2 };
     }
 
     fn sfdUpdateMat(

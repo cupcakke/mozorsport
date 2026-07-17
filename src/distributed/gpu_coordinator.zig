@@ -75,16 +75,18 @@ fn logNcclFailure(err: nccl.ncclResult_t, comptime tag: []const u8) void {
 }
 
 pub const GPUCoordinator = struct {
+    allocator: Allocator,
     world_size: usize,
     rank: usize,
     device_id: i32,
     nccl_comm: ?*nccl.ncclComm,
     cuda_stream: ?*anyopaque,
     barrier_buffer: ?*anyopaque,
+    device_allocations: std.AutoHashMap(usize, usize),
+    current_device_allocation_bytes: usize,
+    peak_device_allocation_bytes: usize,
 
     pub fn init(allocator: Allocator, world_size: usize, rank: usize, local_rank: usize, nccl_id: nccl.ncclUniqueId) !GPUCoordinator {
-        _ = allocator;
-
         if (world_size == 0) {
             return error.InvalidWorldSize;
         }
@@ -137,12 +139,16 @@ pub const GPUCoordinator = struct {
         try checkCuda(nccl.cudaDeviceSynchronize(), "cudaDeviceSynchronize(barrier init)", error.CudaSynchronizeFailed);
 
         return GPUCoordinator{
+            .allocator = allocator,
             .world_size = world_size,
             .rank = rank,
             .device_id = device_id,
             .nccl_comm = nccl_comm_local,
             .cuda_stream = cuda_stream_local,
             .barrier_buffer = barrier_buffer,
+            .device_allocations = std.AutoHashMap(usize, usize).init(allocator),
+            .current_device_allocation_bytes = 0,
+            .peak_device_allocation_bytes = 0,
         };
     }
 
@@ -168,6 +174,8 @@ pub const GPUCoordinator = struct {
             logCudaFailure(nccl.cudaStreamDestroy(stream), "cudaStreamDestroy");
             self.cuda_stream = null;
         }
+        self.device_allocations.deinit();
+        self.current_device_allocation_bytes = 0;
     }
 
     fn setDevice(self: *GPUCoordinator) !void {
@@ -191,7 +199,15 @@ pub const GPUCoordinator = struct {
 
         var dev_ptr: ?*anyopaque = null;
         try checkCuda(nccl.cudaMalloc(&dev_ptr, size), "cudaMalloc", error.CudaMallocFailed);
-        return dev_ptr orelse return error.CudaMallocFailed;
+        const ptr = dev_ptr orelse return error.CudaMallocFailed;
+        const key = @intFromPtr(ptr);
+        self.device_allocations.put(key, size) catch {
+            logCudaFailure(nccl.cudaFree(ptr), "cudaFree(alloc tracking rollback)");
+            return error.OutOfMemory;
+        };
+        self.current_device_allocation_bytes = std.math.add(usize, self.current_device_allocation_bytes, size) catch std.math.maxInt(usize);
+        self.peak_device_allocation_bytes = @max(self.peak_device_allocation_bytes, self.current_device_allocation_bytes);
+        return ptr;
     }
 
     pub fn freeDeviceMemory(self: *GPUCoordinator, ptr: ?*anyopaque) void {
@@ -200,6 +216,14 @@ pub const GPUCoordinator = struct {
             return;
         };
         if (ptr) |p| {
+            const key = @intFromPtr(p);
+            if (self.device_allocations.fetchRemove(key)) |entry| {
+                if (self.current_device_allocation_bytes >= entry.value) {
+                    self.current_device_allocation_bytes -= entry.value;
+                } else {
+                    self.current_device_allocation_bytes = 0;
+                }
+            }
             logCudaFailure(nccl.cudaFree(p), "cudaFree");
         }
     }
@@ -413,6 +437,14 @@ pub const GPUCoordinator = struct {
             error.NCCLAllReduceFailed,
         );
         try checkCuda(nccl.cudaStreamSynchronize(stream), "cudaStreamSynchronize(barrier)", error.CudaSynchronizeFailed);
+    }
+
+    pub fn currentTrackedDeviceBytes(self: *const GPUCoordinator) usize {
+        return self.current_device_allocation_bytes;
+    }
+
+    pub fn peakTrackedDeviceBytes(self: *const GPUCoordinator) usize {
+        return self.peak_device_allocation_bytes;
     }
 
     pub fn isRoot(self: *const GPUCoordinator) bool {

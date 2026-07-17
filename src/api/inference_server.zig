@@ -11,6 +11,7 @@ const SSI = @import("../index/ssi.zig").SSI;
 const Tensor = @import("../core/tensor.zig").Tensor;
 const ModelFormat = @import("../core/model_io.zig").ModelFormat;
 const importModel = @import("../core/model_io.zig").importModel;
+const importInferenceModel = @import("../core/inference_model.zig").importInferenceModel;
 const LearnedEmbedding = @import("../core/learned_embedding.zig").LearnedEmbedding;
 const OFTB = @import("../processor/oftb.zig").OFTB;
 const core_relational = @import("../core_relational/mod.zig");
@@ -299,6 +300,39 @@ fn boostAboveMean(data: []f32) void {
     }
 }
 
+fn bestEmbeddingToken(prediction: []const f32, embedding: *const LearnedEmbedding) !u32 {
+    if (prediction.len < embedding.dim) return error.ShapeMismatch;
+    var pred_norm_sq: f64 = 0.0;
+    var d: usize = 0;
+    while (d < embedding.dim) : (d += 1) {
+        const v = prediction[d];
+        if (!std.math.isFinite(v)) return error.NonFinite;
+        pred_norm_sq += @as(f64, v) * @as(f64, v);
+    }
+    const pred_norm = @sqrt(pred_norm_sq);
+    var best_score: f64 = -std.math.inf(f64);
+    var best_token: u32 = 0;
+    var token: usize = 0;
+    while (token < embedding.vocab_size) : (token += 1) {
+        var dot: f64 = 0.0;
+        var emb_norm_sq: f64 = 0.0;
+        d = 0;
+        while (d < embedding.dim) : (d += 1) {
+            const e = embedding.weight.data[token * embedding.dim + d];
+            if (!std.math.isFinite(e)) return error.NonFinite;
+            dot += @as(f64, prediction[d]) * @as(f64, e);
+            emb_norm_sq += @as(f64, e) * @as(f64, e);
+        }
+        const emb_norm = @sqrt(emb_norm_sq);
+        const score = if (pred_norm <= 1e-12 or emb_norm <= 1e-12) -std.math.inf(f64) else dot / (pred_norm * emb_norm);
+        if (score > best_score or (score == best_score and token < @as(usize, best_token))) {
+            best_score = score;
+            best_token = @intCast(token);
+        }
+    }
+    return best_token;
+}
+
 const ConnectionContext = struct {
     server: *InferenceServer,
     stream: net.Stream,
@@ -467,13 +501,62 @@ pub const InferenceServer = struct {
     }
 
     pub fn loadModel(self: *InferenceServer, path: []const u8) !void {
-        self.model = try importModel(path, self.allocator);
+        if (self.model) |*model| {
+            model.deinit();
+            self.model = null;
+        }
+        if (self.embedding) |*emb| {
+            emb.deinit();
+            self.embedding = null;
+        }
+        if (self.ssi) |*ssi| {
+            ssi.deinit();
+            self.ssi = null;
+        }
+        if (self.ranker) |*r| {
+            r.deinit();
+            self.ranker = null;
+        }
+        var loaded_exported_inference_model = true;
+        self.model = importInferenceModel(path, self.allocator) catch |inference_model_error| blk: {
+            _ = inference_model_error;
+            loaded_exported_inference_model = false;
+            break :blk try importModel(path, self.allocator);
+        };
+        errdefer if (self.model) |*model| {
+            model.deinit();
+            self.model = null;
+        };
         self.ssi = SSI.init(self.allocator);
+        errdefer if (self.ssi) |*ssi| {
+            ssi.deinit();
+            self.ssi = null;
+        };
         self.ranker = try Ranker.init(self.allocator, 3, 8, 42);
+        errdefer if (self.ranker) |*r| {
+            r.deinit();
+            self.ranker = null;
+        };
 
-        const dim = if (self.model.?.rsf) |rsf| (rsf.ctrl orelse return).dim else 256;
+        if (self.model.?.embedding) |emb| {
+            self.embedding = emb;
+            self.model.?.embedding = null;
+        } else {
+            return error.MissingTrainedEmbedding;
+        }
+        errdefer if (self.embedding) |*emb| {
+            emb.deinit();
+            self.embedding = null;
+        };
 
-        self.embedding = try LearnedEmbedding.init(self.allocator, 50000, dim, 42);
+        if (self.model.?.rsf == null or self.model.?.rsf.?.ctrl == null) return error.MissingRSFWeights;
+        if (self.model.?.mgt == null) return error.MissingTokenizer;
+        if (self.embedding.?.vocab_size != self.model.?.mgt.?.vocabSize()) return error.VocabularyMismatch;
+        if (self.embedding.?.dim != (self.model.?.rsf.?.ctrl.?.dim * 2)) return error.ModelDimensionMismatch;
+
+        if (loaded_exported_inference_model) {
+            return;
+        }
 
         self.nsir_graph = try SelfSimilarRelationalGraph.init(self.allocator);
         self.chaos_kernel = ChaosCoreKernel.init(self.allocator);
@@ -1147,6 +1230,9 @@ pub const InferenceServer = struct {
                     defer step_tensor.deinit();
 
                     self.model.?.rsf.?.forward(&step_tensor) catch {};
+                    if (self.embedding) |*emb| {
+                        next_token = bestEmbeddingToken(step_tensor.data, emb) catch next_token;
+                    }
 
                     if (self.nsir_graph) |*graph| {
                         const tensor_bytes = std.mem.sliceAsBytes(step_tensor.data);
@@ -1457,6 +1543,9 @@ pub const InferenceServer = struct {
                         defer step_tensor.deinit();
 
                         self.model.?.rsf.?.forward(&step_tensor) catch {};
+                        if (self.embedding) |*emb| {
+                            next_token = bestEmbeddingToken(step_tensor.data, emb) catch next_token;
+                        }
 
                         if (self.nsir_graph) |*graph| {
                             const tensor_bytes = std.mem.sliceAsBytes(step_tensor.data);
