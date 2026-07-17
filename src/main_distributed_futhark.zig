@@ -413,7 +413,14 @@ pub fn main() !void {
 
     const vocab_path = "/checkpoints/tokenizer.vocab";
 
-    {
+    var vocab_ready_env_owned: ?[]u8 = null;
+    defer if (vocab_ready_env_owned) |owned| allocator.free(owned);
+    vocab_ready_env_owned = std.process.getEnvVarOwned(allocator, "JAIDE_VOCAB_READY") catch null;
+    const vocab_ready: bool = if (vocab_ready_env_owned) |s| std.mem.eql(u8, s, "1") else false;
+
+    if (vocab_ready) {
+        std.debug.print("[Rank {d}] JAIDE_VOCAB_READY=1: skipping BPE training, reusing existing vocab at {s}\n", .{ rank, vocab_path });
+    } else {
         var temp_tokenizer = try MGT.init(allocator, &.{}, &.{}, 32000, .english);
         defer temp_tokenizer.deinit();
 

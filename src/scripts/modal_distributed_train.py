@@ -20,6 +20,7 @@ DATASET_METADATA_FILE = DATASET_DIR / "metadata.json"
 BINARY_PATH = PROJECT_MOUNT_PATH / "zig-out" / "bin" / "jaide-distributed-futhark"
 BINARY_CACHE_PATH = CHECKPOINT_MOUNT_PATH / "jaide-distributed-futhark"
 BUILD_VERSION_FILE = CHECKPOINT_MOUNT_PATH / "build_version.txt"
+VOCAB_PATH = CHECKPOINT_MOUNT_PATH / "tokenizer.vocab"
 CPU_REQUEST = 64.0
 CPU_LIMIT = 80.0
 MEMORY_REQUEST_MB = 262144
@@ -327,6 +328,12 @@ def train_all_ranks(
     base_env["JAIDE_MAX_SAMPLES"] = str(sample_count)
     base_env["JAIDE_MAX_SEQ_LEN"] = "2048"
     base_env["JAIDE_LEARNING_RATE"] = "0.0001"
+    if VOCAB_PATH.is_file() and VOCAB_PATH.stat().st_size > 0:
+        base_env["JAIDE_VOCAB_READY"] = "1"
+        _log(f"existing vocab found at {VOCAB_PATH} ({VOCAB_PATH.stat().st_size} bytes), skipping BPE training (JAIDE_VOCAB_READY=1)")
+    else:
+        base_env.pop("JAIDE_VOCAB_READY", None)
+        _log(f"no valid vocab at {VOCAB_PATH}, BPE training will run on rank 0")
     base_env["NCCL_DEBUG"] = "WARN"
     base_env["NCCL_IB_DISABLE"] = "1"
     base_env["NCCL_SOCKET_IFNAME"] = "lo"
