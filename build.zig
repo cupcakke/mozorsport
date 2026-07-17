@@ -57,6 +57,72 @@ pub fn build(b: *std.Build) void {
     inference_server_exe.root_module.addImport("core_relational", core_relational_mod);
     b.installArtifact(inference_server_exe);
 
+    const eval_exe = b.addExecutable(.{
+        .name = "jaide-eval",
+        .root_source_file = b.path("src/eval_main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    eval_exe.linkLibC();
+    eval_exe.addIncludePath(futhark_include);
+    eval_exe.addCSourceFile(.{ .file = futhark_c, .flags = &.{"-O2"} });
+    eval_exe.step.dependOn(&futhark_cpu_step.step);
+    eval_exe.root_module.addOptions("build_options", cpu_build_options);
+    eval_exe.root_module.addImport("core_relational", core_relational_mod);
+    b.installArtifact(eval_exe);
+
+    const export_exe = b.addExecutable(.{
+        .name = "jaide-export",
+        .root_source_file = b.path("src/export_main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    export_exe.linkLibC();
+    export_exe.addIncludePath(futhark_include);
+    export_exe.addCSourceFile(.{ .file = futhark_c, .flags = &.{"-O2"} });
+    export_exe.step.dependOn(&futhark_cpu_step.step);
+    export_exe.root_module.addOptions("build_options", cpu_build_options);
+    export_exe.root_module.addImport("core_relational", core_relational_mod);
+    b.installArtifact(export_exe);
+
+    const benchmark_exe = b.addExecutable(.{
+        .name = "jaide-benchmark",
+        .root_source_file = b.path("src/benchmark_main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    benchmark_exe.linkLibC();
+    benchmark_exe.addIncludePath(futhark_include);
+    benchmark_exe.addCSourceFile(.{ .file = futhark_c, .flags = &.{"-O2"} });
+    benchmark_exe.step.dependOn(&futhark_cpu_step.step);
+    benchmark_exe.root_module.addOptions("build_options", cpu_build_options);
+    benchmark_exe.root_module.addImport("core_relational", core_relational_mod);
+    b.installArtifact(benchmark_exe);
+
+    const inspect_exe = b.addExecutable(.{
+        .name = "jaide-checkpoint-inspect",
+        .root_source_file = b.path("src/checkpoint_inspect_main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    inspect_exe.linkLibC();
+    inspect_exe.addIncludePath(futhark_include);
+    inspect_exe.addCSourceFile(.{ .file = futhark_c, .flags = &.{"-O2"} });
+    inspect_exe.step.dependOn(&futhark_cpu_step.step);
+    inspect_exe.root_module.addOptions("build_options", cpu_build_options);
+    inspect_exe.root_module.addImport("core_relational", core_relational_mod);
+    b.installArtifact(inspect_exe);
+
+    const split_exe = b.addExecutable(.{
+        .name = "jaide-dataset-split",
+        .root_source_file = b.path("src/dataset_split_main.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    split_exe.linkLibC();
+    split_exe.root_module.addOptions("build_options", cpu_build_options);
+    b.installArtifact(split_exe);
+
     if (gpu_enabled) {
         const distributed_futhark_exe = b.addExecutable(.{
             .name = "jaide-distributed-futhark",
@@ -118,6 +184,7 @@ pub fn build(b: *std.Build) void {
         .{ .step = "test-quantum-adapter", .wrapper = "src/test_root_quantum_adapter.zig", .desc = "Run quantum task adapter tests" },
         .{ .step = "test-signal", .wrapper = "src/test_root_signal.zig", .desc = "Run signal propagation tests" },
         .{ .step = "stress-refcount", .wrapper = "src/test_root_stress_refcount.zig", .desc = "Run tensor refcount stress test" },
+        .{ .step = "test-pipeline", .wrapper = "src/test_root_pipeline.zig", .desc = "Run checkpoint, evaluation, export, and dataset pipeline tests" },
     };
 
     const test_all_step = b.step("test-all", "Run all tests");

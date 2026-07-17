@@ -1899,7 +1899,7 @@ pub const DistributedTrainerFuthark = struct {
             if (embedding_vocab != saved_vocab_size) return TrainerError.VocabSizeMismatch;
             if (embedding_dim != self.model_dim) return TrainerError.ModelDimMismatch;
 
-            var new_embedding = try LearnedEmbedding.init(self.allocator, embedding_vocab, embedding_dim, self.config.embedding_seed);
+            var new_embedding = try LearnedEmbedding.initZero(self.allocator, embedding_vocab, embedding_dim);
             errdefer new_embedding.deinit();
 
             const w_len_u64 = try reader.readInt(u64, .little);
@@ -2028,7 +2028,7 @@ pub const DistributedTrainerFuthark = struct {
             closed = true;
         }
 
-        var new_tokenizer = try createConfiguredTokenizer(self.allocator, self.config);
+        var new_tokenizer = try MGT.init(self.allocator, &.{}, &.{}, null, .english);
         var new_tokenizer_committed = false;
         errdefer if (!new_tokenizer_committed) new_tokenizer.deinit();
         try new_tokenizer.loadVocab(tokenizer_tmp);

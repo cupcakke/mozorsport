@@ -66,6 +66,7 @@ pub fn main() !void {
     if (config.model_path) |path| {
         server.loadModel(path) catch |err| {
             std.debug.print("Failed to load model from {s}: {}\n", .{ path, err });
+            return err;
         };
     }
 

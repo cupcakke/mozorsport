@@ -35,6 +35,26 @@ pub const LearnedEmbedding = struct {
         };
     }
 
+    pub fn initZero(allocator: Allocator, v_size: usize, d: usize) !LearnedEmbedding {
+        var w = try Tensor.init(allocator, &.{ v_size, d });
+        errdefer w.deinit();
+        var g = try Tensor.init(allocator, &.{ v_size, d });
+        errdefer g.deinit();
+        var v = try Tensor.init(allocator, &.{ v_size, d });
+        errdefer v.deinit();
+        @memset(w.data, 0.0);
+        @memset(g.data, 0.0);
+        @memset(v.data, 0.0);
+        return LearnedEmbedding{
+            .weight = w,
+            .grad = g,
+            .velocity = v,
+            .vocab_size = v_size,
+            .dim = d,
+            .allocator = allocator,
+        };
+    }
+
     pub fn deinit(self: *LearnedEmbedding) void {
         self.weight.deinit();
         self.grad.deinit();
@@ -110,7 +130,10 @@ pub const LearnedEmbedding = struct {
     }
 
     pub fn save(self: *const LearnedEmbedding, path: []const u8) !void {
-        const file = try std.fs.cwd().createFile(path, .{});
+        const file = if (std.fs.path.isAbsolute(path))
+            try std.fs.createFileAbsolute(path, .{ .truncate = true })
+        else
+            try std.fs.cwd().createFile(path, .{});
         defer file.close();
         var buf_writer = std.io.bufferedWriter(file.writer());
         const writer = buf_writer.writer();
@@ -125,7 +148,10 @@ pub const LearnedEmbedding = struct {
     }
 
     pub fn load(allocator: Allocator, path: []const u8) !LearnedEmbedding {
-        const file = std.fs.cwd().openFile(path, .{}) catch return error.FileNotFound;
+        const file = if (std.fs.path.isAbsolute(path))
+            std.fs.openFileAbsolute(path, .{}) catch return error.FileNotFound
+        else
+            std.fs.cwd().openFile(path, .{}) catch return error.FileNotFound;
         defer file.close();
         var buf_reader = std.io.bufferedReader(file.reader());
         const reader = buf_reader.reader();

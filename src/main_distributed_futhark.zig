@@ -8,6 +8,7 @@ const MGT = @import("tokenizer/mgt.zig").MGT;
 const nccl = @import("distributed/nccl_bindings.zig");
 const modal_gpu = @import("distributed/modal_gpu.zig");
 const core_relational = @import("core_relational/mod.zig");
+const checkpoint = @import("core/checkpoint.zig");
 
 fn extractDatasetText(allocator: std.mem.Allocator, line: []const u8) !?[]const u8 {
     const parsed = std.json.parseFromSlice(
@@ -207,6 +208,20 @@ fn deployToModal(allocator: std.mem.Allocator, args: [][:0]u8) !void {
     }
 }
 
+fn nextCheckpointEpochIndex() usize {
+    var max_epoch: usize = 0;
+    var dir = std.fs.openDirAbsolute("/checkpoints", .{ .iterate = true }) catch return 1;
+    defer dir.close();
+    var iterator = dir.iterate();
+    while (iterator.next() catch null) |entry| {
+        if (entry.kind != .directory) continue;
+        if (!std.mem.startsWith(u8, entry.name, "epoch_")) continue;
+        const number = std.fmt.parseInt(usize, entry.name[6..], 10) catch continue;
+        if (number > max_epoch) max_epoch = number;
+    }
+    return max_epoch + 1;
+}
+
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     defer _ = gpa.deinit();
@@ -218,6 +233,28 @@ pub fn main() !void {
     if (args.len > 1 and std.mem.eql(u8, args[1], "--deploy")) {
         return deployToModal(allocator, args[2..]);
     }
+
+    var resume_path: ?[]const u8 = null;
+    var dataset_arg: ?[]const u8 = null;
+    var cli_index: usize = 1;
+    while (cli_index < args.len) : (cli_index += 1) {
+        if (std.mem.eql(u8, args[cli_index], "--resume")) {
+            if (cli_index + 1 >= args.len) return error.InvalidConfig;
+            cli_index += 1;
+            resume_path = args[cli_index];
+        } else if (std.mem.eql(u8, args[cli_index], "--dataset")) {
+            if (cli_index + 1 >= args.len) return error.InvalidConfig;
+            cli_index += 1;
+            dataset_arg = args[cli_index];
+        } else if (std.mem.eql(u8, args[cli_index], "--help")) {
+            std.debug.print("jaide-distributed-futhark [--dataset /data/dataset/train.jsonl] [--resume /checkpoints/epoch_003/model.ckpt]\n", .{});
+            return;
+        } else {
+            return error.InvalidConfig;
+        }
+    }
+
+    var resume_metadata: ?checkpoint.CheckpointMetadata = null;
 
     const world_size = try std.process.getEnvVarOwned(allocator, "WORLD_SIZE");
     defer allocator.free(world_size);
@@ -329,10 +366,19 @@ pub fn main() !void {
 
     std.debug.print("[Rank {d}] GPU coordinator initialized\n", .{rank});
 
+    if (resume_path) |path| {
+        resume_metadata = checkpoint.inspectCheckpoint(path) catch |err| {
+            std.debug.print("[Rank {d}] ERROR: checkpoint metadata inspection failed for {s}: {}\n", .{ rank, path, err });
+            coordinator.synchronize() catch {};
+            return err;
+        };
+        try coordinator.synchronize();
+    }
+
     var model_dim_str_owned: ?[]u8 = null;
     defer if (model_dim_str_owned) |owned| allocator.free(owned);
     model_dim_str_owned = std.process.getEnvVarOwned(allocator, "JAIDE_MODEL_DIM") catch null;
-    const model_dim: usize = if (model_dim_str_owned) |s| blk: {
+    var model_dim: usize = if (model_dim_str_owned) |s| blk: {
         break :blk std.fmt.parseInt(usize, s, 10) catch |err| {
             std.debug.print("[Rank {d}] ERROR: invalid JAIDE_MODEL_DIM='{s}': {}\n", .{ rank, s, err });
             return error.InvalidConfig;
@@ -346,7 +392,7 @@ pub fn main() !void {
     var num_layers_str_owned: ?[]u8 = null;
     defer if (num_layers_str_owned) |owned| allocator.free(owned);
     num_layers_str_owned = std.process.getEnvVarOwned(allocator, "JAIDE_LAYERS") catch null;
-    const num_layers: usize = if (num_layers_str_owned) |s| blk: {
+    var num_layers: usize = if (num_layers_str_owned) |s| blk: {
         break :blk std.fmt.parseInt(usize, s, 10) catch |err| {
             std.debug.print("[Rank {d}] ERROR: invalid JAIDE_LAYERS='{s}': {}\n", .{ rank, s, err });
             return error.InvalidConfig;
@@ -360,7 +406,7 @@ pub fn main() !void {
     var local_batch_size_str_owned: ?[]u8 = null;
     defer if (local_batch_size_str_owned) |owned| allocator.free(owned);
     local_batch_size_str_owned = std.process.getEnvVarOwned(allocator, "JAIDE_BATCH_SIZE") catch null;
-    const local_batch_size: usize = if (local_batch_size_str_owned) |s| blk: {
+    var local_batch_size: usize = if (local_batch_size_str_owned) |s| blk: {
         break :blk std.fmt.parseInt(usize, s, 10) catch |err| {
             std.debug.print("[Rank {d}] ERROR: invalid JAIDE_BATCH_SIZE='{s}': {}\n", .{ rank, s, err });
             return error.InvalidConfig;
@@ -384,7 +430,7 @@ pub fn main() !void {
     var lr_env_owned: ?[]u8 = null;
     defer if (lr_env_owned) |owned| allocator.free(owned);
     lr_env_owned = std.process.getEnvVarOwned(allocator, "JAIDE_LEARNING_RATE") catch null;
-    const learning_rate: f32 = if (lr_env_owned) |s| blk: {
+    var learning_rate: f32 = if (lr_env_owned) |s| blk: {
         const v = std.fmt.parseFloat(f32, s) catch |err| {
             std.debug.print("[Rank {d}] ERROR: invalid JAIDE_LEARNING_RATE='{s}': {}\n", .{ rank, s, err });
             return error.InvalidConfig;
@@ -396,10 +442,24 @@ pub fn main() !void {
         return error.InvalidConfig;
     }
 
+    if (resume_metadata) |metadata| {
+        if (model_dim_str_owned != null and model_dim != metadata.model_dim) return error.InvalidConfig;
+        if (num_layers_str_owned != null and num_layers != metadata.num_layers) return error.InvalidConfig;
+        if (local_batch_size_str_owned != null and local_batch_size != metadata.stored_batch_size) return error.InvalidConfig;
+        if (lr_env_owned != null and learning_rate != metadata.learning_rate) return error.InvalidConfig;
+        model_dim = metadata.model_dim;
+        num_layers = metadata.num_layers;
+        local_batch_size = metadata.stored_batch_size;
+        learning_rate = metadata.learning_rate;
+        if (coordinator.isRoot()) {
+            std.debug.print("[Rank 0] Resume metadata loaded: checkpoint={s} version={d} global_step={d} model_dim={d} layers={d} vocab={d} batch={d}\n", .{ resume_path.?, metadata.version, metadata.global_step, metadata.model_dim, metadata.num_layers, metadata.vocab_size, metadata.stored_batch_size });
+        }
+    }
+
     var dataset_path_owned: ?[]u8 = null;
     defer if (dataset_path_owned) |owned| allocator.free(owned);
     dataset_path_owned = std.process.getEnvVarOwned(allocator, "JAIDE_DATASET") catch null;
-    const dataset_path: []const u8 = dataset_path_owned orelse "/data/dataset/train.jsonl";
+    const dataset_path: []const u8 = dataset_arg orelse (dataset_path_owned orelse "/data/dataset/train.jsonl");
 
     std.debug.print("[Rank {d}] Loading dataset from {s}\n", .{ rank, dataset_path });
 
@@ -411,15 +471,32 @@ pub fn main() !void {
         allocator.free(samples);
     }
 
-    const vocab_path = "/checkpoints/tokenizer.vocab";
+    var resume_vocab_path_owned: ?[]u8 = null;
+    defer if (resume_vocab_path_owned) |owned| {
+        std.fs.deleteFileAbsolute(owned) catch {};
+        allocator.free(owned);
+    };
+    const vocab_path: []const u8 = blk: {
+        if (resume_path) |path| {
+            const tokenizer_data = try checkpoint.extractTokenizerData(allocator, path);
+            defer allocator.free(tokenizer_data);
+            resume_vocab_path_owned = try std.fmt.allocPrint(allocator, "/tmp/jaide_resume_tokenizer_rank_{d}.vocab", .{rank});
+            const vocab_file = try std.fs.createFileAbsolute(resume_vocab_path_owned.?, .{ .truncate = true });
+            defer vocab_file.close();
+            try vocab_file.writeAll(tokenizer_data);
+            try vocab_file.sync();
+            break :blk resume_vocab_path_owned.?;
+        }
+        break :blk "/checkpoints/tokenizer.vocab";
+    };
 
     var vocab_ready_env_owned: ?[]u8 = null;
     defer if (vocab_ready_env_owned) |owned| allocator.free(owned);
     vocab_ready_env_owned = std.process.getEnvVarOwned(allocator, "JAIDE_VOCAB_READY") catch null;
-    const vocab_ready: bool = if (vocab_ready_env_owned) |s| std.mem.eql(u8, s, "1") else false;
+    const vocab_ready: bool = if (resume_path != null) true else if (vocab_ready_env_owned) |s| std.mem.eql(u8, s, "1") else false;
 
     if (vocab_ready) {
-        std.debug.print("[Rank {d}] JAIDE_VOCAB_READY=1: skipping BPE training, reusing existing vocab at {s}\n", .{ rank, vocab_path });
+        std.debug.print("[Rank {d}] Reusing tokenizer vocabulary at {s}\n", .{ rank, vocab_path });
     } else {
         var temp_tokenizer = try MGT.init(allocator, &.{}, &.{}, 32000, .english);
         defer temp_tokenizer.deinit();
@@ -477,6 +554,18 @@ pub fn main() !void {
     };
     defer trainer.deinit();
 
+    if (resume_path) |path| {
+        trainer.loadCheckpoint(path) catch |err| {
+            std.debug.print("[Rank {d}] ERROR: loadCheckpoint({s}) failed: {}\n", .{ rank, path, err });
+            coordinator.synchronize() catch {};
+            return err;
+        };
+        try coordinator.synchronize();
+        if (coordinator.isRoot()) {
+            std.debug.print("[Rank 0] Resumed checkpoint {s}: global_step={d} model_dim={d} layers={d} vocab={d}\n", .{ path, trainer.global_step, trainer.model_dim, trainer.num_layers, trainer.vocab_size });
+        }
+    }
+
     std.debug.print("[Rank {d}] learning_rate={d}\n", .{ rank, learning_rate });
     std.debug.print("[Rank {d}] Futhark-accelerated trainer initialized (model_dim={d}, layers={d}, embedding_accel=disabled)\n", .{ rank, model_dim, num_layers });
 
@@ -489,7 +578,7 @@ pub fn main() !void {
         std.debug.print("============================================================\n\n", .{});
     }
 
-    {
+    if (resume_path == null) {
         const n_kg_cpus: usize = std.Thread.getCpuCount() catch 4;
         const n_kg_workers: usize = @min(n_kg_cpus, @max(1, samples.len));
         const kg_ctxs = try allocator.alloc(KGWorkerCtx, n_kg_workers);
@@ -549,12 +638,20 @@ pub fn main() !void {
         };
     }
 
-    if (coordinator.isRoot()) {
-        std.debug.print("[Rank 0] Knowledge graph populated.\n", .{});
+        if (coordinator.isRoot()) {
+            std.debug.print("[Rank 0] Knowledge graph populated.\n", .{});
+        }
+    } else if (coordinator.isRoot()) {
+        std.debug.print("[Rank 0] Resume mode: using NSIR graph restored from checkpoint without pre-training KG mutation.\n", .{});
     }
 
     var loss_history = std.ArrayList(EpochMetric).init(allocator);
     defer loss_history.deinit();
+
+    const starting_epoch_number: usize = if (resume_path != null) nextCheckpointEpochIndex() else 1;
+    if (coordinator.isRoot()) {
+        std.debug.print("[Rank 0] Checkpoint epoch numbering will start at epoch_{d:0>3}\n", .{starting_epoch_number});
+    }
 
     var epoch: usize = 0;
     while (epoch < num_epochs) : (epoch += 1) {
@@ -573,17 +670,18 @@ pub fn main() !void {
 
         if (coordinator.isRoot()) {
             root_epoch_work: {
-                loss_history.append(.{ .epoch = epoch + 1, .loss = avg_loss, .time_s = elapsed }) catch |err| {
+                const epoch_number = starting_epoch_number + epoch;
+                loss_history.append(.{ .epoch = epoch_number, .loss = avg_loss, .time_s = elapsed }) catch |err| {
                     std.debug.print("[Rank 0] ERROR: loss_history.append failed: {}\n", .{err});
                     root_work_err = err;
                     break :root_epoch_work;
                 };
 
-                std.debug.print("[Epoch {d}/{d}] Loss: {d:.6} | Time: {d:.2}s\n", .{ epoch + 1, num_epochs, avg_loss, elapsed });
+                std.debug.print("[Epoch {d}/{d} -> epoch_{d:0>3}] Loss: {d:.6} | Time: {d:.2}s\n", .{ epoch + 1, num_epochs, epoch_number, avg_loss, elapsed });
 
                 {
                     var dir_buf: [256]u8 = undefined;
-                    const dir_path = std.fmt.bufPrint(&dir_buf, "/checkpoints/epoch_{d:0>3}", .{epoch + 1}) catch "/checkpoints";
+                    const dir_path = std.fmt.bufPrint(&dir_buf, "/checkpoints/epoch_{d:0>3}", .{epoch_number}) catch "/checkpoints";
                     std.fs.makeDirAbsolute("/checkpoints") catch |e| switch (e) {
                         error.PathAlreadyExists => {},
                         else => std.debug.print("[Rank 0] makeDirAbsolute(/checkpoints) failed: {} (continuing)\n", .{e}),
@@ -597,7 +695,7 @@ pub fn main() !void {
                     const checkpoint_path = std.fmt.bufPrint(
                         &checkpoint_path_buf,
                         "/checkpoints/epoch_{d:0>3}/model.ckpt",
-                        .{epoch + 1},
+                        .{epoch_number},
                     ) catch {
                         root_work_err = error.NoSpaceLeft;
                         break :root_epoch_work;

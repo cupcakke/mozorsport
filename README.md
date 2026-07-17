@@ -471,7 +471,7 @@ Az NSIR gráf computeTopologyHash függvényt alkalmaz, amely SHA-256 kivonatot 
 
 Integráció a ModelFormat-tal
 
-Míg a neurális súlyok a JAIDE40 tárolóban vannak tárolva, az NSIR gráf exportálható tenzorként a modell fájlba való felvételhez, vagy külön tárolható a következtetés során végzett dinamikus gráf frissítésekhez. A tréner checkpoint fájlja emellett tartalmazza a saveCheckpoint útján a csomópontok Qubit állapotát, az élek EdgeQuality-jét és súlyait a checkpoint_version=7 formátumban.
+Míg a neurális súlyok a JAIDE40 tárolóban vannak tárolva, az NSIR gráf exportálható tenzorként a modell fájlba való felvételhez, vagy külön tárolható a következtetés során végzett dinamikus gráf frissítésekhez. A tréner checkpoint fájlja emellett tartalmazza a saveCheckpoint útján a csomópontok Qubit állapotát, az élek EdgeQuality-jét és súlyait a checkpoint_version=9 formátumban.
 
 ---
 
@@ -1610,7 +1610,7 @@ A tréner verzionált ellenőrzőpontokat támogat a tanítás folytonosságána
 
 Mentés/betöltés mechanizmus
 
-- Verzió követés: A TrainerConfig meghatároz egy checkpoint_version-t (jelenleg 7) a kompatibilitás fenntartásához.
+- Verzió követés: A TrainerConfig meghatároz egy checkpoint_version-t (jelenleg 9) a kompatibilitás fenntartásához.
 - Szerializáció: Az RSF súlyok, beágyazási mátrixok és az NSIR gráf állapota bináris formátumba kerülnek szerializálva; a fájl atomi rename-mel írja felül a célt.
 - 0-ás rang felelőssége: Csak a gyökér rang (0-ás rang) végzi a tényleges fájl I/O-t az ellenőrzőpontokhoz az írási versengés elkerülése érdekében, amelyet egy synchronize barrier követ a többi ranghoz.
 - Signal engine rebind: A loadCheckpoint után a signal_engine automatikusan újra rebindálódik a betöltött nsir_graph és crev_kernel.flow_analyzer referenciáira.
@@ -2047,3 +2047,7 @@ Hardver gyorsítás
 | JAIDE_NCCL_ID_PATH | NCCL egyedi azonosító megosztás útvonala. |
 | WORLD_SIZE, RANK, MASTER_ADDR, MASTER_PORT | Elosztott tanítás rangkonfigurációja. |
 | MODAL_API_TOKEN | A jaide-distributed-futhark --deploy módhoz szükséges Modal API token. |
+
+---
+
+Production checkpoint, evaluation, export, inference and benchmarking pipeline documentation is in `docs/JAIDE_PIPELINE.md`. It is based on the current code implementation and records checkpoint version 9, the exact `saveCheckpoint` layout, strict forward-only evaluation semantics, deterministic dataset splitting, checkpoint resume, export, inference serving, benchmarking, memory accounting, and the reason `embedding_l2_loss` is not perplexity.

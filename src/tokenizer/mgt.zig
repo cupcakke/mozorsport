@@ -1245,7 +1245,10 @@ pub const MGT = struct {
     }
 
     pub fn saveVocab(self: *MGT, path: []const u8) !void {
-        var file = try std.fs.cwd().createFile(path, .{ .truncate = true });
+        var file = if (std.fs.path.isAbsolute(path))
+            try std.fs.createFileAbsolute(path, .{ .truncate = true })
+        else
+            try std.fs.cwd().createFile(path, .{ .truncate = true });
         defer file.close();
 
         var writer = file.writer();
@@ -1357,7 +1360,10 @@ pub const MGT = struct {
     pub fn loadVocab(self: *MGT, path: []const u8) !void {
         self.reset();
 
-        var file = try std.fs.cwd().openFile(path, .{});
+        var file = if (std.fs.path.isAbsolute(path))
+            try std.fs.openFileAbsolute(path, .{})
+        else
+            try std.fs.cwd().openFile(path, .{});
         defer file.close();
 
         var reader = file.reader();
