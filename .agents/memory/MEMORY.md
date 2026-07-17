@@ -1,8 +1,0 @@
-- [JAIDE naming constraint](jaide-naming-constraint.md) — standard ML/DL jargon words are permanently banned anywhere in this codebase (code, comments, docs, identifiers).
-- [JAIDE Phase C training time budget](jaide-training-time-budget.md) — mini/status-bench-scale training runs must finish in ~5 minutes; treat longer runs as a bug to fix immediately, not a config to loosen.
-- [Modal token env sync issue](modal-token-env-sync.md) — MODAL_TOKEN_ID/SECRET can exist in Secrets but read as empty in shell; re-submitting via requestSecrets and restarting the Setup Modal Token workflow resolves it.
-- [RSF invertibility depth-blowup](jaide-rsf-invertibility-blowup.md) — unconstrained per-layer weight spectral norm compounds across depth into clip-saturation rounding blowup; fix via spectral-norm init constraint, not looser tolerance.
-    - [Zig 0.14.1 std.http.Client API](zig-http-client-api.md) — no more http.Headers struct; use client.open(method, uri, .{server_header_buffer, extra_headers}).
-    - [RSF invertibility depth-blowup](jaide-rsf-invertibility-blowup.md) — unconstrained per-layer weight spectral norm compounds across depth into clip-saturation rounding blowup; fix via spectral-norm init constraint, not looser tolerance.
-    - [Zig 0.14.1 std.http.Client API](zig-http-client-api.md) — no more http.Headers struct; use client.open(method, uri, .{server_header_buffer, extra_headers}).
-    
