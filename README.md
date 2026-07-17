@@ -1,12 +1,12 @@
 JAIDE ÁTTEKINTÉS
 
-A JAIDE egy foundation nagy nyelvi modell, amely az 5. gyök architektúra paradigmán alapul. Ez a modell eltér a hagyományos Perceptron, CNN, RNN és Transformer architektúráktól azáltal, hogy Visszafordítható Szórt Folyam (RSF) vermet alkalmaz. Ez a tervezés biztosítja, hogy minden neurális réteg bijektív és invertálható legyen, lehetővé téve az O(dim) memória komplexitást a visszaterjesztés során, mivel az aktivációk menet közben rekonstruálhatók ahelyett, hogy gyorsítótárban tárolnák őket.
+A JAIDE egy foundation nagy nyelvi modell, amely az 5. gyökér architektúra paradigmán alapul. Ez a modell eltér a hagyományos Perceptron, CNN, RNN és Transformer architektúráktól azáltal, hogy Visszafordítható Szórt Folyam (RSF) vermet alkalmaz. Ez a tervezés biztosítja, hogy minden neurális réteg bijektív és invertálható legyen, lehetővé téve az O(dim) memória komplexitást a visszaterjesztés során, mivel az aktivációk menet közben rekonstruálhatók ahelyett, hogy gyorsítótárban tárolnák őket.
 
 A JAIDE az első ténylegesen létező, működő architektúra, amelynek definiáló primitívje nem a σ(W·x + b) alak, és nem is annak valamely variánsa. A RSF réteg alapművelete egy bijektív, invertálható kereszt-affin csatolás (skála- és fordításkomponensekkel, determinisztikus szórt permutációkkal), nem pedig egy nemlineáris aktivációval lezárt affin transzformáció.
 
 A rendszer ezt a visszafordítható neurális gerincet egy magas szintű kognitív réteggel integrálja, amelyet Mag Relációs Rétegnek neveznek, és amely kvantum-inspirált relációs gráfokat és fraktál dinamikát alkalmaz az érveléshez. A teljes verem — beleértve a VPU vektorprocesszort, az FNDSManager fraktál adatstruktúrákat, a CREVPipeline oksági kivonót, a FormalVerificationEngine invariáns ellenőrzőt, a SecurityProofEngine információáramlás igazolót és a QuantumTaskAdapter kvantum szubgráf végrehajtót — közvetlenül részt vesz minden tanítási lépésben és minden következtetési kérésben; egyetlen komponens sincs null-ként inicializálva utólagos aktiválásra várva.
 
-Az 5. gyök paradigma: Visszafordítható Szórt Folyam (RSF)
+Az 5. gyökér paradigma: Visszafordítható Szórt Folyam (RSF)
 
 A JAIDE neurális feldolgozásának magja az RSFLayer, amely kereszt-affin csatoló rétegekből és determinisztikus szórt permutációkból áll. A Transformerekkel ellentétben, amelyek O(L · S · d) memória skálázástól szenvednek a figyelemmechanizmusok miatt, a JAIDE fix memória lábnyomot tart fenn az L mélységtől függetlenül.
 
