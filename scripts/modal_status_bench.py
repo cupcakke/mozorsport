@@ -442,6 +442,13 @@ def run_gpu_train_and_infer(
         train_env["JAIDE_MAX_SAMPLES"] = str(min(sample_count, SAMPLE_CAP))
         train_env["JAIDE_MAX_SEQ_LEN"] = str(MAX_SEQ_LEN)
         train_env["JAIDE_LEARNING_RATE"] = LEARNING_RATE
+        vocab_file = Path("/checkpoints/tokenizer.vocab")
+        if vocab_file.is_file() and vocab_file.stat().st_size > 0:
+            train_env["JAIDE_VOCAB_READY"] = "1"
+            _log(f"existing vocab found at {vocab_file} ({vocab_file.stat().st_size} bytes), skipping BPE training (JAIDE_VOCAB_READY=1)")
+        else:
+            train_env.pop("JAIDE_VOCAB_READY", None)
+            _log(f"no valid vocab at {vocab_file}, BPE training will run on rank 0")
         train_env["NCCL_DEBUG"] = "WARN"
         train_env["NCCL_IB_DISABLE"] = "1"
         train_env["NCCL_SOCKET_IFNAME"] = "lo"
